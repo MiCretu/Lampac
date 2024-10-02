@@ -1,10 +1,14 @@
 FROM debian:12.5-slim
 
-EXPOSE 8000
+EXPOSE 80
 WORKDIR /home
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip chromium \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN curl -L -k -o ffprobe.zip https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffprobe-6.1-linux-64.zip \
+    && unzip -o ffprobe.zip && rm -f ffprobe.zip \
+    && mv ffprobe /usr/bin/ffprobe && chmod +x /usr/bin/ffprobe
 
 RUN curl -fSL -k -o dotnet.tar.gz https://dotnetcli.azureedge.net/dotnet/aspnetcore/Runtime/6.0.28/aspnetcore-runtime-6.0.28-linux-x64.tar.gz \
     && mkdir -p /usr/share/dotnet \
@@ -13,18 +17,20 @@ RUN curl -fSL -k -o dotnet.tar.gz https://dotnetcli.azureedge.net/dotnet/aspnetc
 
 RUN curl -L -k -o publish.zip https://github.com/immisterio/Lampac/releases/latest/download/publish.zip \
     && unzip -o publish.zip && rm -f publish.zip && rm -rf merchant \
-    && rm -rf runtimes/os* && rm -rf runtimes/win* && rm -rf runtimes/linux-arm runtimes/linux-arm64 runtimes/linux-musl-arm64 runtimes/linux-musl-x64 \
+    && rm -rf runtimes/win* && rm -rf runtimes/os* && rm -rf runtimes/linux-arm runtimes/linux-arm64 runtimes/linux-musl-arm64 runtimes/linux-musl-x64 \
     && touch isdocker
 
-RUN curl -k -s https://raw.githubusercontent.com/immisterio/Lampac/main/Build/Docker/update.sh | bash
+RUN curl -L -k -o minor.zip https://4b0d9775.bwa.pages.dev/lpc/update.zip && unzip -o minor.zip && rm -f minor.zip
 
-RUN echo '{"listenport":8000,"listenscheme":"https","KnownProxies":[{"ip":"0.0.0.0","prefixLength":0}],"rch":{"enable":true},"typecache":"mem","mikrotik":true,"weblog":true,"serverproxy":{"verifyip":false,"showOrigUri":true,"buffering":{"enable":false}},"pirate_store": false,"dlna":{"enable":false},"puppeteer":{"executablePath":"/usr/bin/chromium"},"LampaWeb":{"autoupdate":false},"online":{"checkOnlineSearch":false},"Rezka":{"host":"https://hdrezka.me","corseu":true,"xrealip":true,"uacdn":"https://prx-ams.ukrtelcdn.net","hls":false},"VDBmovies":{"streamproxy":true},"iRemux":{"streamproxy":false,"geostreamproxy":["UA"],"apn": "http://apn.cfhttp.top"},"VCDN":{"rhub":true},"Kinobase":{"rhub":true},"Ashdi":{"rhub":true},"Eneyida":{"rhub":true},"Kinoukr":{"rhub":true},"AnilibriaOnline":{"rhub":true},"Eporner":{"streamproxy":false},"Ebalovo":{"enable":false},"Chaturbate":{"enable":false}}' > /home/init.conf
-
-RUN echo '[{"enable":true,"dll":"SISI.dll"},{"enable":true,"dll":"Online.dll"},{"enable":true,"initspace":"TorrServer.ModInit","dll":"TorrServer.dll"}]' > /home/module/manifest.json
-
-RUN echo '{"runtimeOptions":{"tfm":"net6.0","frameworks":[{"name":"Microsoft.NETCore.App","version":"6.0.0"},{"name":"Microsoft.AspNetCore.App","version":"6.0.0"}],"configProperties":{"System.GC.HeapHardLimit": 140000000,"System.GC.Server":false,"System.Reflection.Metadata.MetadataUpdater.IsSupported":false,"System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization":false}}}' > /home/Lampac.runtimeconfig.json
-
-RUN mkdir -p torrserver && curl -L -k -o torrserver/TorrServer-linux https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-amd64 \
+RUN mkdir -p torrserver && curl -L -k -o torrserver/TorrServer-linux https://github.com/YouROK/TorrServer/releases/download/MatriX.134/TorrServer-linux-amd64 \
     && chmod +x torrserver/TorrServer-linux
+
+RUN echo '{"listenport":80,"puppeteer":{"executablePath":"/usr/bin/chromium"},"KnownProxies": [{"ip":"172.0.0.0","prefixLength":8}],"rch":{"enable":true},"typecache":"mem","mikrotik":true,"pirate_store":false,"serverproxy":{"cache_img":false,"verifyip":false},"dlna":{"enable":false},"online":{"findkp":"vsdn","checkOnlineSearch":false},"Filmix":{"overridehost":"https://bwa-cloud.apn.monster/lite/filmix"},"VCDN":{"rhub":true},"Eneyida":{"overridehost":"http://bwa-cloud.cfhttp.top/lite/eneyida"},"Kinoukr":{"overridehost":"http://bwa-cloud.cfhttp.top/lite/kinoukr"},"Kodik":{"overridehost":"http://bwa-cloud.cfhttp.top/lite/kodik"},"VDBmovies":{"rhub":true},"Zetflix":{"enable":true},"Rezka":{"enable":false},"BongaCams":{"enable": false},"Ebalovo":{"enable":false}}' > /home/init.conf
+
+RUN echo '{"rdb": true, "updatets": false}' > module/TorrServer.conf
+
+RUN echo '{"BitTorr":{"CacheSize":96468992,"ConnectionsLimit":30,"DisableDHT":false,"DisablePEX":false,"DisableTCP":false,"DisableUPNP":false,"DisableUTP":false,"DisableUpload":false,"DownloadRateLimit":0,"EnableDLNA":false,"EnableDebug":false,"EnableIPv6":false,"EnableRutorSearch":false,"ForceEncrypt":false,"FriendlyName":"","PeersListenPort":0,"PreloadCache":13,"ReaderReadAHead":87,"RemoveCacheOnDrop":false,"RetrackersMode":1,"SslCert":"","SslKey":"","SslPort":0,"TorrentDisconnectTimeout":120,"TorrentsSavePath":"","UploadRateLimit":0,"UseDisk":false}}' > torrserver/settings.json
+
+RUN echo '[{"enable":true,"dll":"SISI.dll"},{"enable":true,"dll":"Online.dll"},{"enable":true,"initspace":"TorrServer.ModInit","dll":"TorrServer.dll"}]' > module/manifest.json
 
 ENTRYPOINT ["/usr/share/dotnet/dotnet", "Lampac.dll"]
