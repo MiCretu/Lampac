@@ -24,9 +24,9 @@ namespace Lampac.Engine
     {
         IServiceScope serviceScope;
 
-        public static string appversion => "119";
+        public static string appversion => "120";
 
-        public static string minorversion => "15";
+        public static string minorversion => "1";
 
         public HybridCache hybridCache { get; private set; }
 
@@ -261,6 +261,25 @@ namespace Lampac.Engine
                 ctime = multiaccess;
 
             return TimeSpan.FromMinutes(ctime);
+        }
+        #endregion
+
+        #region IsOverridehost
+        public bool IsOverridehost(BaseSettings init, out string overridehost)
+        {
+            overridehost = null;
+
+            if (!string.IsNullOrEmpty(init.overridehost))
+                overridehost = init.overridehost;
+
+            if (string.IsNullOrEmpty(overridehost) && init.overridehosts != null && init.overridehosts.Length > 0)
+                overridehost = init.overridehosts[Random.Shared.Next(0, init.overridehosts.Length)];
+
+            if (string.IsNullOrEmpty(overridehost))
+                return false;
+
+            overridehost += HttpContext.Request.QueryString.Value;
+            return true;
         }
         #endregion
 

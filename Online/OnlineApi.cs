@@ -316,8 +316,9 @@ namespace Lampac.Controllers
                 VoKinoInvoke.SendOnline(AppInit.conf.VoKino, online);
 
             send("Filmix", conf.Filmix, arg_url: (source == "filmix" ? $"?postid={id}" : ""));
-            send("KinoPub", conf.KinoPub, arg_url: (source == "pub" ? $"?postid={id}" : ""));
+            send("Filmix", conf.FilmixTV, "filmixtv", arg_url: (source == "filmix" ? $"?postid={id}" : ""));
             send("Filmix", conf.FilmixPartner, "fxapi", arg_url: (source == "filmix" ? $"?postid={id}" : ""));
+            send("KinoPub", conf.KinoPub, arg_url: (source == "pub" ? $"?postid={id}" : ""));
 
             send("Alloha", conf.Alloha);
             send("Rezka", conf.Rezka);
@@ -325,16 +326,25 @@ namespace Lampac.Controllers
             if (kinopoisk_id > 0)
             {
                 send("Zetflix", conf.Zetflix);
-                send("VDBmovies", conf.VDBmovies, "vdbmovies");
+                send("VDBmovies", conf.VDBmovies);
+
+                if (serial == -1 || serial == 0)
+                    send("FanCDN", conf.FanCDN);
             }
 
             send("VideoCDN", conf.VCDN, "vcdn");
             send("Kinobase", conf.Kinobase);
 
             if (serial == -1 || serial == 0)
+            {
                 send("iRemux", conf.iRemux, "remux");
 
-            send("Voidboost", conf.Voidboost);
+                if (conf.PidTor.enable)
+                {
+                    if ((conf.PidTor.torrs != null && conf.PidTor.torrs.Length > 0) || (conf.PidTor.auth_torrs != null && conf.PidTor.auth_torrs.Count > 0) || AppInit.modules.FirstOrDefault(i => i.dll == "TorrServer.dll" && i.enable) != null)
+                        online.Add(($"{conf.PidTor.displayname ?? "Pid̶Tor"}", "{localhost}/lite/pidtor", "pidtor", conf.PidTor.displayindex > 0 ? conf.PidTor.displayindex : online.Count));
+                }
+            }
 
             if (kinopoisk_id > 0)
                 send("Ashdi (UKR)", conf.Ashdi, "ashdi");
@@ -347,19 +357,18 @@ namespace Lampac.Controllers
             if (kinopoisk_id > 0)
                 send("VideoDB", conf.VideoDB);
 
-            if (serial == -1 || serial == 1)
-                send("Seasonvar", conf.Seasonvar);
-
-            if (serial == -1 || serial == 1)
-                send("LostfilmHD", conf.Lostfilmhd);
-
             if (AppInit.conf.Collaps.two)
                 send("Collaps", conf.Collaps, "collaps-dash");
             send("Collaps", conf.Collaps);
-            send("HDVB", conf.HDVB);
 
             if (serial == -1 || serial == 0)
                 send("Redheadsound", conf.Redheadsound);
+
+            if (kinopoisk_id > 0)
+            {
+                send("VideoHUB", conf.CDNvideohub, "cdnvideohub");
+                send("HDVB", conf.HDVB);
+            }
 
             send("Kinotochka", conf.Kinotochka);
 
@@ -481,11 +490,13 @@ namespace Lampac.Controllers
                     {
                         case "fxapi":
                         case "filmix":
+                        case "filmixtv":
                         case "kinopub":
                         case "vokino":
                         case "alloha":
                         case "remux":
                         case "ashdi":
+                        case "pidtor":
                             quality = " ~ 2160p";
                             break;
                         case "videodb":
@@ -503,6 +514,8 @@ namespace Lampac.Controllers
                         case "lostfilmhd":
                         case "vdbmovies":
                         case "collaps-dash":
+                        case "fancdn":
+                        case "cdnvideohub":
                             quality = " ~ 1080p";
                             break;
                         case "voidboost":
