@@ -355,6 +355,8 @@ namespace Lampac.Engine.Middlewares
 
             string hlshost = Regex.Match(decryptLink.uri, "(https?://[^/]+)/").Groups[1].Value;
             string hlspatch = Regex.Match(decryptLink.uri, "(https?://[^\n\r]+/)([^/]+)$").Groups[1].Value;
+            if (string.IsNullOrEmpty(hlspatch) && decryptLink.uri.EndsWith("/"))
+                hlspatch = decryptLink.uri;
 
             m3u8 = Regex.Replace(m3u8, "([\n\r])([^\n\r]+)", m =>
             {
@@ -377,7 +379,7 @@ namespace Lampac.Engine.Middlewares
                 }
                 else
                 {
-                    uri = decryptLink.uri + uri;
+                    uri = hlspatch + uri;
                 }
 
                 return m.Groups[1].Value + validArgs($"{proxyhost}/{CORE.ProxyLink.Encrypt(uri, decryptLink)}", account_email);
