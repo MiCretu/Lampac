@@ -56,7 +56,9 @@ namespace Shared.Model
 
         public OnlinesSettings Kinobase { get; set; } = new OnlinesSettings("https://kinobase.org") { rip = true, geostreamproxy = new List<string>() { "ALL" } };
 
-        public RezkaSettings Rezka { get; set; } = new RezkaSettings("https://hdrezka.me") { scheme = "http", uacdn = "https://prx2-ams.ukrtelcdn.net" };
+        public RezkaSettings Rezka { get; set; } = new RezkaSettings("https://hdrezka.me") { scheme = "http" };
+
+        public RezkaSettings RezkaPrem { get; set; } = new RezkaSettings("https://standby-rezka.tv") { enable = false, scheme = "http" };
 
         public CollapsSettings Collaps { get; set; } = new CollapsSettings("https://api.ninsel.ws", streamproxy: true, two: true);
 
@@ -82,15 +84,15 @@ namespace Shared.Model
 
         public ZetflixSettings Zetflix { get; set; } = new ZetflixSettings("https://zetfix.online") { geostreamproxy = new List<string>() { "ALL" }, hls = true };
 
-        public OnlinesSettings VideoDB { get; set; } = new OnlinesSettings("https://kinoplay2.site", enable: false, rip: true) { geostreamproxy = new List<string>() { "UA" } };
+        public OnlinesSettings VideoDB { get; set; } = new OnlinesSettings("https://30bf3790.obrut.watch") { geostreamproxy = new List<string>() { "ALL" } };
 
         public OnlinesSettings CDNmovies { get; set; } = new OnlinesSettings("https://coldcdn.xyz");
 
         public OnlinesSettings VDBmovies { get; set; } = new OnlinesSettings("https://cdnmovies-stream.online"/*, token: "02d56099082ad5ad586d7fe4e2493dd9"*/) { geostreamproxy = new List<string>() { "ALL" } };
 
-        public OnlinesSettings FanCDN { get; set; } = new OnlinesSettings("https://fancdn.net") { geostreamproxy = new List<string>() { "ALL" } };
+        public OnlinesSettings FanCDN { get; set; } = new OnlinesSettings("https://fancdn.net", token: "abcd1234abcd1234abcd1234abcd1234") { geostreamproxy = new List<string>() { "ALL" } };
 
-        public OnlinesSettings VCDN { get; set; } = new OnlinesSettings("http://89442664434375553.svetacdn.in/0HlZgU1l1mw5", "https://videocdn.tv", token: "3i40G5TSECmLF77oAqnEgbx61ZWaOYaE") { scheme = "http", geostreamproxy = new List<string>() { "ALL" } };
+        public OnlinesSettings VCDN { get; set; } = new OnlinesSettings("http://22884.annacdn.cc/nPBZWDQ5doe2", "https://videocdn.tv", token: "3i40G5TSECmLF77oAqnEgbx61ZWaOYaE") { scheme = "http", geostreamproxy = new List<string>() { "ALL" } };
 
         public VokinoSettings VoKino { get; set; } = new VokinoSettings("http://api.vokino.tv", streamproxy: true);
 
