@@ -37,20 +37,29 @@ namespace Shared.Engine.CORE
             this.conf = conf;
             this.refresh = refresh;
         }
+
+        public ProxyManager(BaseSettings conf, bool refresh = true)
+        {
+            plugin = !string.IsNullOrEmpty(conf.plugin) ? conf.plugin : (conf.host ?? conf.apihost);
+            this.conf = conf;
+            this.refresh = refresh;
+        }
         #endregion
 
-        #region Get
-        public WebProxy Get()
+        #region Get / BaseGet
+        public WebProxy Get() => BaseGet().proxy;
+
+        public (WebProxy proxy, (string ip, string username, string password) data) BaseGet()
         {
             if (!conf.useproxy && !conf.useproxystream)
-                return null;
+                return default;
 
-            WebProxy proxy(ProxySettings p_orig, string key)
+            (WebProxy proxy, (string ip, string username, string password) data) proxy(ProxySettings p_orig, string key)
             {
                 ProxySettings p = ConfigureProxy(p_orig);
 
                 if (p?.list == null || p.list.Count == 0)
-                    return null;
+                    return default;
 
                 if (!database.TryGetValue(key, out ProxyManagerModel val) || val.proxyip == null || !p.list.Contains(val.proxyip))
                 {
@@ -203,7 +212,7 @@ namespace Shared.Engine.CORE
         }
 
 
-        WebProxy ConfigureWebProxy(ProxySettings p, string proxyip)
+        (WebProxy proxy, (string ip, string username, string password) data) ConfigureWebProxy(ProxySettings p, string proxyip)
         {
             NetworkCredential credentials = null;
 
@@ -216,7 +225,8 @@ namespace Shared.Engine.CORE
             else if (p.useAuth)
                 credentials = new NetworkCredential(p.username, p.password);
 
-            return new WebProxy(proxyip, p.BypassOnLocal, null, credentials);
+            var proxy = new WebProxy(proxyip, p.BypassOnLocal, null, credentials);
+            return (proxy, (proxyip, credentials?.UserName, credentials?.Password));
         }
 
 
@@ -257,9 +267,9 @@ namespace Shared.Engine.CORE
                             string result = string.Empty;
 
                             if (!string.IsNullOrEmpty(action.data))
-                                result = await HttpClient.Post(action.url, action.data, httpversion: 2, timeoutSeconds: action.timeoutSeconds, proxy: ConfigureWebProxy(p, proxy));
+                                result = await HttpClient.Post(action.url, action.data, httpversion: 2, timeoutSeconds: action.timeoutSeconds, proxy: ConfigureWebProxy(p, proxy).proxy);
                             else
-                                result = await HttpClient.Get(action.url, httpversion: 2, timeoutSeconds: action.timeoutSeconds, proxy: ConfigureWebProxy(p, proxy));
+                                result = await HttpClient.Get(action.url, httpversion: 2, timeoutSeconds: action.timeoutSeconds, proxy: ConfigureWebProxy(p, proxy).proxy);
 
                             if (result == null || !result.Contains(action.contains))
                             {

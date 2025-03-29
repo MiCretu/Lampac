@@ -6,7 +6,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web;
 using Lampac.Engine.CORE;
+using Lampac.Models.LITE;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
@@ -14,9 +16,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Engine;
 using Shared.Engine.CORE;
 using Shared.Model.Base;
 using Shared.Model.Online;
+using Shared.Model.SISI;
 using Shared.Models;
 using IO = System.IO;
 
@@ -26,9 +30,9 @@ namespace Lampac.Engine
     {
         IServiceScope serviceScope;
 
-        public static string appversion => "128";
+        public static string appversion => "138";
 
-        public static string minorversion => "6";
+        public static string minorversion => "15";
 
         public HybridCache hybridCache { get; private set; }
 
@@ -37,6 +41,8 @@ namespace Lampac.Engine
         public RequestModel requestInfo => HttpContext?.Features?.Get<RequestModel>();
 
         public string host => AppInit.Host(HttpContext);
+
+        public ActionResult badInitMsg { get; set; }
 
         public BaseController()
         {
@@ -47,12 +53,13 @@ namespace Lampac.Engine
             memoryCache = scopeServiceProvider.GetService<IMemoryCache>();
         }
 
+        #region mylocalip
         async public ValueTask<string> mylocalip()
         {
             string key = "BaseController:mylocalip";
             if (!hybridCache.TryGetValue(key, out string userIp))
             {
-                var myip = await HttpClient.Get<JObject>($"{AppInit.conf.FilmixPartner.host}/my_ip");
+                var myip = await HttpClient.Get<JObject>("https://api.ipify.org/?format=json");
                 if (myip == null || string.IsNullOrWhiteSpace(myip.Value<string>("ip")))
                     return null;
 
@@ -62,6 +69,7 @@ namespace Lampac.Engine
 
             return userIp;
         }
+        #endregion
 
         #region httpHeaders
         public List<HeadersModel> httpHeaders(BaseSettings init, List<HeadersModel> _startHeaders = null)
@@ -70,17 +78,36 @@ namespace Lampac.Engine
             if (init.headers == null)
                 return headers;
 
+            return httpHeaders(init.host, HeadersModel.Join(HeadersModel.Init(init.headers), headers));
+        }
+
+        public List<HeadersModel> httpHeaders(string site, List<HeadersModel> _headers)
+        {
+            if (_headers == null)
+                return _headers;
+
+            var headers = new List<HeadersModel>(_headers.Count);
+
             string ip = requestInfo.IP;
             string account_email = HttpContext.Request.Query["account_email"].ToString() ?? string.Empty;
 
-            foreach (var h in init.headers)
+            foreach (var h in _headers)
             {
                 if (string.IsNullOrEmpty(h.val) || string.IsNullOrEmpty(h.name))
                     continue;
 
-                string val = h.val.Replace("{account_email}", account_email)
-                                  .Replace("{ip}", ip)
-                                  .Replace("{host}", init.host);
+                string val = h.val;
+
+                if (val.StartsWith("encrypt:"))
+                {
+                    string encrypt = Regex.Match(val, "^encrypt:([^\n\r]+)").Groups[1].Value;
+                    val = new OnlinesSettings(null, encrypt).host;
+                }
+
+                val = val.Replace("{account_email}", account_email.ToLower().Trim())
+                         .Replace("{ip}", ip)
+                         .Replace("{host}", site)
+                         .Replace("{cf_clearance}", CrypTo.cf_clearance());
 
                 if (val.Contains("{arg:"))
                 {
@@ -109,7 +136,8 @@ namespace Lampac.Engine
                     }
                 }
 
-                headers.Add(new HeadersModel(h.name, val));
+                if (headers.Find(i => i.name == h.name) == null)
+                    headers.Add(new HeadersModel(h.name, val));
             }
 
             return headers;
@@ -117,40 +145,68 @@ namespace Lampac.Engine
         #endregion
 
         #region proxy
-        public string HostImgProxy(string uri, int width = 0, int height = 0, List<HeadersModel> headers = null, string plugin = null)
+        public string HostImgProxy(string uri, int height = 0, List<HeadersModel> headers = null, string plugin = null)
         {
             if (!AppInit.conf.sisi.rsize || string.IsNullOrWhiteSpace(uri)) 
                 return uri;
 
             var init = AppInit.conf.sisi;
-            width = Math.Max(width, init.widthPicture);
-            height = Math.Max(height, init.heightPicture);
+            int width = init.widthPicture;
+            height = height > 0 ? height : init.heightPicture;
 
-            if (plugin != null && init.rsize_disable != null && init.rsize_disable.Contains(plugin))
+            string goEncryptUri()
+            {
+                string encrypt_uri = ProxyLink.Encrypt(uri, requestInfo.IP, headers, verifyip: false, ex: DateTime.Now.AddMinutes(5));
+                if (AppInit.conf.accsdb.enable)
+                    encrypt_uri = AccsDbInvk.Args(encrypt_uri, HttpContext);
+
+                return encrypt_uri;
+            }
+
+            if (plugin != null && init.proxyimg_disable != null && init.proxyimg_disable.Contains(plugin))
                 return uri;
+
+            if ((width == 0 && height == 0) || (plugin != null && init.rsize_disable != null && init.rsize_disable.Contains(plugin)))
+            {
+                if (!string.IsNullOrEmpty(init.bypass_host))
+                {
+                    string sheme = uri.StartsWith("https:") ? "https" : "http";
+                    string bypass_host = init.bypass_host.Replace("{sheme}", sheme).Replace("{uri}", Regex.Replace(uri, "^https?://", ""));
+
+                    if (bypass_host.Contains("{encrypt_uri}"))
+                        bypass_host = bypass_host.Replace("{encrypt_uri}", goEncryptUri());
+
+                    return bypass_host;
+                }
+
+                return $"{host}/proxyimg/{goEncryptUri()}";
+            }
 
             if (!string.IsNullOrEmpty(init.rsize_host))
             {
                 string sheme = uri.StartsWith("https:") ? "https" : "http";
-                return init.rsize_host.Replace("{width}", width.ToString()).Replace("{height}", height.ToString())
-                           .Replace("{sheme}", sheme).Replace("{uri}", Regex.Replace(uri, "^https?://", ""));
+                string rsize_host = init.rsize_host.Replace("{width}", width.ToString()).Replace("{height}", height.ToString())
+                                                   .Replace("{sheme}", sheme).Replace("{uri}", Regex.Replace(uri, "^https?://", ""));
+
+                if (rsize_host.Contains("{encrypt_uri}"))
+                    rsize_host = rsize_host.Replace("{encrypt_uri}", goEncryptUri());
+
+                return rsize_host;
             }
 
-            uri = ProxyLink.Encrypt(uri, requestInfo.IP, headers);
-
-            if (AppInit.conf.accsdb.enable)
-                uri = AccsDbInvk.Args(uri, HttpContext);
-
-            return $"{host}/proxyimg:{width}:{height}/{uri}";
+            return $"{host}/proxyimg:{width}:{height}/{goEncryptUri()}";
         }
 
-        public string HostStreamProxy(Istreamproxy conf, string uri, List<HeadersModel> headers = null, WebProxy proxy = null, string plugin = null, bool sisi = false)
+        public string HostStreamProxy(BaseSettings conf, string uri, List<HeadersModel> headers = null, WebProxy proxy = null)
         {
-            if (!AppInit.conf.serverproxy.enable || string.IsNullOrEmpty(uri) || conf == null || conf.rhub)
+            if (!AppInit.conf.serverproxy.enable || string.IsNullOrEmpty(uri) || conf == null)
+                return uri;
+
+            if (conf.rhub && !conf.rhub_streamproxy)
                 return uri;
 
             bool streamproxy = conf.streamproxy || conf.useproxystream;
-            if (!streamproxy && conf.geostreamproxy != null && conf.geostreamproxy.Count > 0)
+            if (!streamproxy && conf.geostreamproxy != null && conf.geostreamproxy.Length > 0)
             {
                 string country = requestInfo.Country;
                 if (!string.IsNullOrEmpty(country) && country.Length == 2)
@@ -194,7 +250,10 @@ namespace Lampac.Engine
                     return apnlink(AppInit.conf.apn);
                 #endregion
 
-                uri = ProxyLink.Encrypt(uri, requestInfo.IP, headers, conf != null && conf.useproxystream ? proxy : null, plugin);
+                if (conf.headers_stream != null && conf.headers_stream.Count > 0)
+                    headers = HeadersModel.Init(conf.headers_stream);
+
+                uri = ProxyLink.Encrypt(uri, requestInfo.IP, httpHeaders(conf.host ?? conf.apihost, headers), conf != null && conf.useproxystream ? proxy : null, conf?.plugin);
 
                 if (AppInit.conf.accsdb.enable)
                     uri = AccsDbInvk.Args(uri, HttpContext);
@@ -213,11 +272,11 @@ namespace Lampac.Engine
         {
             if (hybridCache.TryGetValue(key, out T _val))
             {
-                HttpContext.Response.Headers.TryAdd("X-InvokeCache", "HIT");
+                HttpContext.Response.Headers.TryAdd("X-Invoke-Cache", "HIT");
                 return new CacheResult<T>() { IsSuccess = true, Value = _val };
             }
 
-            HttpContext.Response.Headers.TryAdd("X-InvokeCache", "MISS");
+            HttpContext.Response.Headers.TryAdd("X-Invoke-Cache", "MISS");
 
             var val = await onget.Invoke(new CacheResult<T>());
 
@@ -265,10 +324,39 @@ namespace Lampac.Engine
         }
         #endregion
 
-        #region IsOverridehost
-        public bool IsOverridehost(BaseSettings init, out string overridehost)
+        #region IsCacheError
+        public bool IsCacheError(BaseSettings init)
         {
-            overridehost = null;
+            if (!AppInit.conf.multiaccess || init.rhub)
+                return false;
+
+            var gbc = new ResponseCache();
+            if (memoryCache.TryGetValue(gbc.ErrorKey(HttpContext), out object errorCache))
+            {
+                HttpContext.Response.Headers.TryAdd("X-RCache", "true");
+
+                if (errorCache is OnErrorResult)
+                {
+                    badInitMsg = Json(errorCache);
+                    return true;
+                }
+                else if (errorCache is string)
+                {
+                    string msg = errorCache.ToString();
+                }
+
+                badInitMsg = Ok();
+                return true;
+            }
+
+            return false;
+        }
+        #endregion
+
+        #region IsOverridehost
+        async public ValueTask<ActionResult> IsOverridehost(BaseSettings init)
+        {
+            string overridehost = null;
 
             if (!string.IsNullOrEmpty(init.overridehost))
                 overridehost = init.overridehost;
@@ -277,10 +365,38 @@ namespace Lampac.Engine
                 overridehost = init.overridehosts[Random.Shared.Next(0, init.overridehosts.Length)];
 
             if (string.IsNullOrEmpty(overridehost))
-                return false;
+                return null;
 
-            overridehost += HttpContext.Request.QueryString.Value;
-            return true;
+            if (string.IsNullOrEmpty(init.overridepasswd))
+            {
+                if (overridehost.Contains("?"))
+                    overridehost += "&" + HttpContext.Request.QueryString.Value.Remove(0, 1);
+                else
+                    overridehost += HttpContext.Request.QueryString.Value;
+
+                return new RedirectResult(overridehost);
+            }
+
+            string uri = overridehost + HttpContext.Request.Path.Value + HttpContext.Request.QueryString.Value;
+
+            string clientip = requestInfo.IP;
+            if (requestInfo.Country == null)
+                clientip = await mylocalip();
+
+            string html = await HttpClient.Get(uri, timeoutSeconds: 10, headers: HeadersModel.Init
+            (
+                ("localrequest", init.overridepasswd),
+                ("x-client-ip", clientip)
+            ));
+
+            if (html == null)
+                return new ContentResult() { StatusCode = 502, Content = string.Empty };
+
+            html = Regex.Replace(html, "\"(https?://[^/]+/proxy/)", "\"_tmp_ $1");
+            html = Regex.Replace(html, $"\"{overridehost}", $"\"{host}");
+            html = html.Replace("\"_tmp_ ", "\"");
+
+            return ContentTo(html);
         }
         #endregion
 
@@ -289,14 +405,17 @@ namespace Lampac.Engine
         {
             error_msg = null;
 
-            if (!AppInit.conf.accsdb.enable || init.group == 0 || requestInfo.IsLocalRequest)
-                return false;
-
-            var user = requestInfo.user;
-            if (user == null || init.group > user.group)
+            if (init.group > 0)
             {
-                error_msg = AppInit.conf.accsdb.denyGroupMesage;
-                return true;
+                var user = requestInfo.user;
+                if (user == null || init.group > user.group)
+                {
+                    error_msg = AppInit.conf.accsdb.denyGroupMesage.
+                                Replace("{account_email}", requestInfo?.user_uid).
+                                Replace("{user_uid}", requestInfo?.user_uid);
+
+                    return true;
+                }
             }
 
             return false;
@@ -311,51 +430,129 @@ namespace Lampac.Engine
         #endregion
 
         #region loadKit
-        public T loadKit<T>(T init, Func<AppInit, T> select) where T : BaseSettings
+        public bool IsKitConf { get; private set; }
+
+        async public ValueTask<JObject> loadKitConf()
         {
-            if (!AppInit.conf.kit.enable || string.IsNullOrEmpty(AppInit.conf.kit.path))
+            if (!AppInit.conf.kit.enable || string.IsNullOrEmpty(AppInit.conf.kit.path) || string.IsNullOrEmpty(requestInfo?.user_uid))
+                return null;
+
+            string memKey = $"loadKit:{requestInfo.user_uid}";
+            if (!memoryCache.TryGetValue(memKey, out JObject appinit))
+            {
+                string json;
+
+                if (Regex.IsMatch(AppInit.conf.kit.path, "^https?://"))
+                {
+                    string uri = AppInit.conf.kit.path.Replace("{uid}", HttpUtility.UrlEncode(requestInfo.user_uid));
+                    json = await HttpClient.Get(uri, timeoutSeconds: 5);
+                }
+                else
+                {
+                    string init_file = $"{AppInit.conf.kit.path}/{CrypTo.md5(requestInfo.user_uid)}";
+                    if (!IO.File.Exists(init_file))
+                        return null;
+
+                    json = IO.File.ReadAllText(init_file);
+                }
+
+                if (json == null)
+                    return null;
+
+                try
+                {
+                    appinit = JsonConvert.DeserializeObject<JObject>(json);
+                }
+                catch { return null; }
+
+                memoryCache.Set(memKey, appinit, DateTime.Now.AddSeconds(Math.Max(5, AppInit.conf.kit.cacheToSeconds)));
+            }
+
+            return appinit;
+        }
+
+        async public ValueTask<T> loadKit<T>(T _init, Func<JObject, T, T, T> func = null) where T : BaseSettings, ICloneable
+        {
+            var init = (T)_init.Clone();
+            if (!init.kit)
                 return init;
 
-            string init_file = $"{AppInit.conf.kit.path}/{CrypTo.md5(requestInfo.user_uid)}";
-            if (!IO.File.Exists(init_file))
+            return loadKit(init, await loadKitConf(), func, clone: false);
+        }
+
+        public T loadKit<T>(T _init, JObject appinit, Func<JObject, T, T, T> func = null, bool clone = true) where T : BaseSettings, ICloneable
+        {
+            var init = clone ? (T)_init.Clone() : _init;
+            if (init == null || !init.kit)
                 return init;
 
-            var appinit = JsonConvert.DeserializeObject<AppInit>(IO.File.ReadAllText(init_file));
-            BaseSettings conf = select.Invoke(appinit);
+            if (appinit == null || string.IsNullOrEmpty(init.plugin) || !appinit.ContainsKey(init.plugin))
+                return init;
 
-            init.enable = conf.enable;
-            init.displayname = conf.displayname;
-            init.displayindex = conf.displayindex;
+            var conf = appinit.Value<JObject>(init.plugin);
 
-            init.host = conf.host;
-            init.apihost = conf.apihost;
-            init.headers = conf.headers;
-            init.scheme = conf.scheme;
-            init.overridehost = conf.overridehost;
+            void update<T2>(string key, Action<T2> updateAction)
+            {
+                if (conf.ContainsKey(key))
+                    updateAction(conf.Value<T2>(key));
+            }
 
-            init.streamproxy = false;
-            init.geostreamproxy = null;
+            update<bool>("enable", v => init.enable = v);
+            update<string>("displayname", v => init.displayname = v);
+            update<int>("displayindex", v => init.displayindex = v);
+
+            update<string>("cookie", v => init.cookie = v);
+            update<string>("token", v => init.token = v);
+
+            update<string>("host", v => init.host = v);
+            update<string>("apihost", v => init.apihost = v);
+            update<string>("scheme", v => init.scheme = v);
+            update<bool>("hls", v => init.hls = v);
+
+            update<string>("overridehost", v => init.overridehost = v);
+            update<string>("overridepasswd", v => init.overridepasswd = v);
+            if (conf.ContainsKey("overridehosts"))
+                init.overridehosts = conf["overridehosts"].ToObject<string[]>();
+
+            if (conf.ContainsKey("headers"))
+                init.headers = conf["headers"].ToObject<Dictionary<string, string>>();
+
+            init.apnstream = true;
+            if (conf.ContainsKey("apn"))
+                init.apn = conf["apn"].ToObject<ApnConf>();
+
             init.useproxystream = false;
+            update<bool>("streamproxy", v => init.streamproxy = v);
+            if (conf.ContainsKey("geostreamproxy"))
+                init.geostreamproxy = conf["geostreamproxy"].ToObject<string[]>();
 
-            init.proxy = conf.proxy;
-            if (init?.proxy?.list != null && init.proxy.list.Count > 0)
-                init.useproxy = conf.useproxy;
+            if (conf.ContainsKey("proxy"))
+            {
+                init.proxy = conf["proxy"].ToObject<ProxySettings>();
+                if (init?.proxy?.list != null && init.proxy.list.Count > 0)
+                    update<bool>("useproxy", v => init.useproxy = v);
+            }
 
             if (init.useproxy)
             {
                 init.rhub = false;
                 init.rhub_fallback = false;
             }
-            else if (AppInit.conf.kit.rhub_fallback)
+            else if (AppInit.conf.kit.rhub_fallback || init.rhub_fallback)
             {
-                init.rhub = conf.rhub;
-                init.rhub_fallback = conf.rhub_fallback;
+                update<bool>("rhub", v => init.rhub = v);
+                update<bool>("rhub_fallback", v => init.rhub_fallback = v);
             }
             else
             {
                 init.rhub = true;
-                init.rhub_fallback = false;
+                init.rhub_fallback = true;
             }
+
+            IsKitConf = true;
+
+            if (func != null)
+                return func.Invoke(conf, init, conf.ToObject<T>());
 
             return init;
         }

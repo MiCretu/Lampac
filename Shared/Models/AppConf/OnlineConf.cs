@@ -15,6 +15,10 @@
 
         public bool version { get; set; }
 
+        public bool btn_priority_forced { get; set; }
+
+        public bool showquality { get; set; }
+
 
         public string apn { get; set; }
     }

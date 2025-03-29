@@ -67,6 +67,18 @@ namespace Lampac.Engine.CORE
             }
         }
 
+        public static string SHA(string text)
+        {
+            using (SHA1 sha = SHA1.Create())
+            {
+                // Compute the hash of the given string
+                byte[] hashValue = sha.ComputeHash(Encoding.UTF8.GetBytes(text));
+
+                // Convert the byte array to string format
+                return BitConverter.ToString(hashValue).Replace("-", "").ToLower();
+            }
+        }
+
         public static string AES256(string text, string secret_pw, string secret_iv)
         {
             using (Aes encryptor = Aes.Create())
@@ -111,17 +123,31 @@ namespace Lampac.Engine.CORE
             }
         }
 
+        #region unic
         static string ArrayList => "qwertyuioplkjhgfdsazxcvbnmQWERTYUIOPLKJHGFDSAZXCVBNM1234567890";
         static string ArrayListToNumber => "1234567890";
-        public static string unic(int size = 8, bool IsNumberCode = false)
+        public static string unic(int size = 8, bool IsNumberCode = false, string addArrayList = null)
         {
             StringBuilder array = new StringBuilder();
+            string list = IsNumberCode ? ArrayListToNumber : (ArrayList + addArrayList);
+
             for (int i = 0; i < size; i++)
-            {
-                array.Append(IsNumberCode ? ArrayListToNumber[Random.Shared.Next(0, 9)] : ArrayList[Random.Shared.Next(0, 61)]);
-            }
+                array.Append(list[Random.Shared.Next(0, list.Length)]);
 
             return array.ToString();
         }
+        #endregion
+
+        #region cf_clearance
+        static string _cfclearance = null;
+        public static string cf_clearance()
+        {
+            if (_cfclearance != null)
+                return _cfclearance;
+
+            _cfclearance = $"{unic(43)}-{((DateTimeOffset)DateTime.Now).ToUnixTimeSeconds()}-1.2.1.1-{unic(299, addArrayList: "._")}";
+            return _cfclearance;
+        }
+        #endregion
     }
 }

@@ -9,11 +9,9 @@ using Lampac.Engine.CORE;
 using System;
 using System.IO;
 using Newtonsoft.Json;
-using PuppeteerSharp;
 using Shared.Engine;
 using Lampac.Engine;
 using Microsoft.AspNetCore.SignalR;
-using DnsClient;
 using System.Linq;
 
 namespace Lampac
@@ -40,32 +38,47 @@ namespace Lampac
             Console.WriteLine(init + "\n");
             File.WriteAllText("current.conf", JsonConvert.SerializeObject(AppInit.conf, Formatting.Indented));
             
-            if (!AppInit.conf.mikrotik) 
+            if (AppInit.conf.mikrotik) 
+            {
+                #region GC
+                {
+                    var timer = new System.Timers.Timer(1000 * 60);
+                    timer.Elapsed += (sender, e) =>
+                    {
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                    };
+                    timer.AutoReset = true;
+                    timer.Enabled = true;
+                }
+                #endregion
+            }
+            else
             {
                 ThreadPool.GetMinThreads(out int workerThreads, out int completionPortThreads);
                 ThreadPool.SetMinThreads(Math.Max(4096, workerThreads), Math.Max(1024, completionPortThreads));
             }
 
-            #region puppeteer
-            try
+            #region Playwright
+            if (AppInit.conf.chromium.enable || AppInit.conf.firefox.enable)
             {
-                if (AppInit.conf.puppeteer.enable)
-                {
-                    ThreadPool.QueueUserWorkItem(async _ =>
-                    {
-                        try
-                        {
-                            if (string.IsNullOrWhiteSpace(AppInit.conf.puppeteer.executablePath))
-                                await new BrowserFetcher().DownloadAsync();
+                Environment.SetEnvironmentVariable("NODE_OPTIONS", "--max-old-space-size=64");
 
-                            if (PuppeteerTo.IsKeepOpen)
-                                PuppeteerTo.LaunchKeepOpen();
-                        }
-                        catch (Exception ex) { Console.WriteLine(ex); }
-                    });
-                }
+                ThreadPool.QueueUserWorkItem(async _ =>
+                {
+                    if (await PlaywrightBase.InitializationAsync())
+                    {
+                        if (AppInit.conf.chromium.enable)
+                            _ = Chromium.CreateAsync().ConfigureAwait(false);
+
+                        if (AppInit.conf.firefox.enable)
+                            _ = Firefox.CreateAsync().ConfigureAwait(false);
+                    }
+                });
+
+                ThreadPool.QueueUserWorkItem(async _ => await Chromium.CloseLifetimeContext());
+                ThreadPool.QueueUserWorkItem(async _ => await Firefox.CloseLifetimeContext());
             }
-            catch { }
             #endregion
 
             if (!File.Exists("passwd"))
@@ -83,40 +96,44 @@ namespace Lampac
             ThreadPool.QueueUserWorkItem(async _ => await TrackersCron.Run());
             ThreadPool.QueueUserWorkItem(async _ => await ProxyLink.Cron());
             ThreadPool.QueueUserWorkItem(async _ => await PluginsCron.Run());
+            ThreadPool.QueueUserWorkItem(async _ => await KurwaCron.Run());
 
-            #region tmdb proxy
-            var tmdb = AppInit.conf.serverproxy.tmdb;
-            if (!tmdb.useproxy && (string.IsNullOrWhiteSpace(tmdb.API_IP) || string.IsNullOrWhiteSpace(tmdb.IMG_IP)))
+            #region fix update.sh
+            if (File.Exists("update.sh"))
             {
-                ThreadPool.QueueUserWorkItem(async _ =>
+                var olds = new string[] 
                 {
-                    var lookup = new LookupClient(IPAddress.Parse(tmdb.DNS ?? "9.9.9.9"));
+                    "02a7e97392e63b7e9e35a39ce475d6f8",
+                    "6354eab8b101af90cb247fc8c977dd6b",
+                    "b94b42ff158682661761a0b50a808a3b",
+                    "97b0d657786b14e6a2faf7186de0556c",
+                    "6b60a4d2173e99b11ecf4e792a24f598",
+                    "cae6f0e79bbb2e6832922f25614d83a1",
+                    "97b0d657786b14e6a2faf7186de0556c",
+                    "cae6f0e79bbb2e6832922f25614d83a1",
+                    "587794ca93c8d0318332858cf0e71e98",
+                    "174ac2b94c5aa0e5ac086f843fd086a6",
+                    "9c258d50e9eb06316efdf33de8b66dc3",
+                    "bb4d6f2ba74b6a25dc3e4638c7f5282a",
+                    "9607ae5805eaf5d06220298581a99beb",
+                    "30078b973188c696273e10d6ef0ebbb2",
+                    "92f5e2e03d2cc2697f2ee00becdb4696",
+                    "b565c7e163485b8f8cc258b95f2891b6"
+                };
 
-                    #region api.themoviedb.org
-                    if (string.IsNullOrWhiteSpace(tmdb.API_IP))
+                try
+                {
+                    if (olds.Contains(CrypTo.md5(File.ReadAllText("update.sh"))))
                     {
-                        string uri = "https://api.themoviedb.org/3/movie/1079091?api_key=4ef0d7355d9ffb5151e987764708ce96&append_to_response=content_ratings,release_dates,keywords,alternative_titles&language=ru";
-                        string json = await HttpClient.Get(uri, timeoutSeconds: 10);
-                        if (json == null || !json.Contains("1079091"))
+                        ThreadPool.QueueUserWorkItem(async _ => 
                         {
-                            var result = await lookup.QueryAsync("api.themoviedb.org", QueryType.A);
-                            tmdb.API_IP = result?.Answers?.ARecords()?.FirstOrDefault()?.Address?.ToString();
-                        }
+                            string new_update = await HttpClient.Get("https://raw.githubusercontent.com/immisterio/Lampac/refs/heads/main/update.sh");
+                            if (new_update != null && new_update.Contains("DEST=\"/home/lampac\""))
+                                File.WriteAllText("update.sh", new_update);
+                        });
                     }
-                    #endregion
-
-                    #region image.tmdb.org
-                    if (string.IsNullOrWhiteSpace(tmdb.IMG_IP))
-                    {
-                        byte[] img = await HttpClient.Download("https://image.tmdb.org/t/p/w300/54U26SA33pxxJ2lf5mRxWeqRTLu.jpg", timeoutSeconds: 10);
-                        if (img == null || img.Length != 13160)
-                        {
-                            var result = await lookup.QueryAsync("image.tmdb.org", QueryType.A);
-                            tmdb.API_IP = result?.Answers?.ARecords()?.FirstOrDefault()?.Address?.ToString();
-                        }
-                    }
-                    #endregion
-                });
+                }
+                catch { }
             }
             #endregion
 

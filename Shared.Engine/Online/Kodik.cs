@@ -1,4 +1,5 @@
-﻿using Shared.Model.Online;
+﻿using Shared.Model.Base;
+using Shared.Model.Online;
 using Shared.Model.Online.Kodik;
 using Shared.Model.Templates;
 using System.Text;
@@ -309,22 +310,27 @@ namespace Shared.Engine.Online
             {
                 if (!string.IsNullOrWhiteSpace(match.Groups[2].Value))
                 {
-                    int zCharCode = Convert.ToInt32('Z');
+                    string m3u = match.Groups[2].Value;
+                    if (!m3u.Contains("manifest.m3u8"))
+                    {
+                        int zCharCode = Convert.ToInt32('Z');
 
-                    string src = Regex.Replace(match.Groups[2].Value, "[a-zA-Z]", e => {
-                        int eCharCode = Convert.ToInt32(e.Value[0]);
-                        return ((eCharCode <= zCharCode ? 90 : 122) >= (eCharCode = eCharCode + 13) ? (char)eCharCode : (char)(eCharCode - 26)).ToString();
-                    });
+                        string src = Regex.Replace(match.Groups[2].Value, "[a-zA-Z]", e =>
+                        {
+                            int eCharCode = Convert.ToInt32(e.Value[0]);
+                            return ((eCharCode <= zCharCode ? 90 : 122) >= (eCharCode = eCharCode + 13) ? (char)eCharCode : (char)(eCharCode - 26)).ToString();
+                        });
 
-                    string decodedString = DecodeUrlBase64(src);
+                        m3u = DecodeUrlBase64(src);
+                    }
 
-                    if (decodedString.StartsWith("//"))
-                        decodedString = $"https:{decodedString}";
+                    if (m3u.StartsWith("//"))
+                        m3u = $"https:{m3u}";
 
-                    if (!usehls && decodedString.Contains(".m3u"))
-                        decodedString = decodedString.Replace(":hls:manifest.m3u8", "");
+                    if (!usehls && m3u.Contains(".m3u"))
+                        m3u = m3u.Replace(":hls:manifest.m3u8", "");
 
-                    streams.Insert(0, new StreamModel() { q = $"{match.Groups[1].Value}p", url = decodedString });
+                    streams.Insert(0, new StreamModel() { q = $"{match.Groups[1].Value}p", url = m3u });
                 }
 
                 match = match.NextMatch();
@@ -336,7 +342,7 @@ namespace Shared.Engine.Online
             return streams;
         }
 
-        public string VideoParse(List<StreamModel>? streams, string? title, string? original_title, int episode, bool play)
+        public string VideoParse(List<StreamModel>? streams, string? title, string? original_title, int episode, bool play, VastConf? vast = null)
         {
             if (streams == null || streams.Count == 0)
                 return string.Empty;
@@ -344,13 +350,15 @@ namespace Shared.Engine.Online
             if (play)
                 return onstreamfile(streams[0].url);
 
-            string streansquality = "\"quality\": {" + string.Join(",", streams.Select(s => $"\"{s.q}\":\"{onstreamfile(s.url)}\"")) + "}";
-
-            string name = title ?? original_title;
+            string name = title ?? original_title ?? "auto";
             if (episode > 0)
                 name += $" ({episode} серия)";
 
-            return "{\"method\":\"play\",\"url\":\"" + onstreamfile(streams[0].url) + "\",\"title\":\"" + name + "\", " + streansquality + "}";
+            var streamquality = new StreamQualityTpl();
+            foreach (var l in streams)
+                streamquality.Append(onstreamfile(l.url), l.q);
+
+            return VideoTpl.ToJson("play", onstreamfile(streams[0].url), name, streamquality: streamquality, vast: vast);
         }
         #endregion
 

@@ -3,8 +3,10 @@ using System.Threading.Tasks;
 using Lampac.Engine.CORE;
 using Lampac.Models.SISI;
 using Microsoft.AspNetCore.Mvc;
+using Shared.Engine;
 using Shared.Engine.CORE;
 using Shared.Engine.SISI;
+using Shared.PlaywrightCore;
 using SISI;
 
 namespace Lampac.Controllers.BongaCams
@@ -15,59 +17,41 @@ namespace Lampac.Controllers.BongaCams
         [Route("bgs")]
         async public Task<ActionResult> Index(string search, string sort, int pg = 1)
         {
-            var init = AppInit.conf.BongaCams.Clone();
+            var init = await loadKit(AppInit.conf.BongaCams);
+            if (await IsBadInitialization(init, rch: false))
+                return badInitMsg;
 
-            if (!init.enable)
-                return OnError("disable");
-
-            if (NoAccessGroup(init, out string error_msg))
-                return OnError(error_msg, false);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
+            if (init.priorityBrowser != "http" && PlaywrightBrowser.Status != PlaywrightStatus.NoHeadless)
+                return OnError("NoHeadless");
 
             if (!string.IsNullOrEmpty(search))
                 return OnError("no search", false);
 
-            var proxyManager = new ProxyManager("bgs", init);
-            var proxy = proxyManager.Get();
+            var proxyManager = new ProxyManager(init);
+            var proxy = proxyManager.BaseGet();
 
             string memKey = $"BongaCams:list:{sort}:{pg}";
             if (!hybridCache.TryGetValue(memKey, out (List<PlaylistItem> playlists, int total_pages) cache))
             {
-                reset: var rch = new RchClient(HttpContext, host, init, requestInfo);
-                if (rch.IsNotSupport("web", out string rch_error))
-                    return OnError(rch_error, false);
-
-                if (rch.IsNotConnected())
-                    return ContentTo(rch.connectionMsg);
-
                 string html = await BongaCamsTo.InvokeHtml(init.corsHost(), sort, pg, url => 
                 {
-                    if (rch.enable)
-                        return rch.Get(init.cors(url), httpHeaders(init));
+                    if (init.priorityBrowser == "http")
+                        return HttpClient.Get(url, httpversion: 2, timeoutSeconds: 8, headers: httpHeaders(init), proxy: proxy.proxy);
 
-                    return HttpClient.Get(init.cors(url), timeoutSeconds: 10, proxy: proxy, httpversion: 2, headers: httpHeaders(init));
+                    return PlaywrightBrowser.Get(init, url, httpHeaders(init), proxy.data);
                 });
 
                 cache.playlists = BongaCamsTo.Playlist(html, out int total_pages);
                 cache.total_pages = total_pages;
 
                 if (cache.playlists.Count == 0)
-                {
-                    if (IsRhubFallback(init))
-                        goto reset;
+                    return OnError("playlists", proxyManager);
 
-                    return OnError("playlists", proxyManager, !rch.enable);
-                }
-
-                if (!rch.enable)
-                    proxyManager.Success();
-
+                proxyManager.Success();
                 hybridCache.Set(memKey, cache, cacheTime(5, init: init));
             }
 
-            return OnResult(cache.playlists, init, BongaCamsTo.Menu(host, sort), proxy: proxy, plugin: "bgs", total_pages: cache.total_pages);
+            return OnResult(cache.playlists, init, BongaCamsTo.Menu(host, sort), proxy: proxy.proxy, total_pages: cache.total_pages);
         }
     }
 }

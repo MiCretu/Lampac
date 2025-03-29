@@ -41,6 +41,7 @@ namespace Lampac.Engine.Middlewares
 
         async public Task InvokeAsync(HttpContext httpContext)
         {
+            var init = AppInit.conf.serverproxy;
             var requestInfo = httpContext.Features.Get<RequestModel>();
             string reqip = requestInfo.IP;
             string servUri = httpContext.Request.Path.Value.Replace("/proxy/", "").Replace("/proxy-dash/", "").Replace("://", ":/_/").Replace("//", "/").Replace(":/_/", "://") + httpContext.Request.QueryString.Value;
@@ -48,14 +49,14 @@ namespace Lampac.Engine.Middlewares
             if (httpContext.Request.Path.Value.StartsWith("/proxy-dash/"))
             {
                 string dashkey = Regex.Match(servUri, "^([^/]+)").Groups[1].Value;
-                if (!memoryCache.TryGetValue($"proxy-dash:{dashkey}:{(AppInit.conf.serverproxy.verifyip ? reqip : "")}", out string baseURL)) {
+                if (!memoryCache.TryGetValue($"proxy-dash:{dashkey}:{(init.verifyip ? reqip : "")}", out string baseURL)) {
                     httpContext.Response.StatusCode = 403;
                     return;
                 }
 
                 servUri = servUri.Replace($"{dashkey}/", baseURL);
 
-                if (AppInit.conf.serverproxy.showOrigUri)
+                if (init.showOrigUri)
                     httpContext.Response.Headers.Add("PX-Orig", servUri);
 
                 using (var client = _httpClientFactory.CreateClient("proxy"))
@@ -63,7 +64,7 @@ namespace Lampac.Engine.Middlewares
                     var collaps_header = HeadersModel.Init(("Origin", "https://api.ninsel.ws"), ("Referer", $"https://api.ninsel.ws/"), ("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"));
 
                     var request = CreateProxyHttpRequest(httpContext, collaps_header, new Uri(servUri), false);
-                    var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, httpContext.RequestAborted);
+                    var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, httpContext.RequestAborted).ConfigureAwait(false);
 
                     httpContext.Response.Headers.Add("PX-Cache", "BYPASS");
                     await CopyProxyHttpResponse(httpContext, response);
@@ -71,32 +72,36 @@ namespace Lampac.Engine.Middlewares
             }
             else if (httpContext.Request.Path.Value.StartsWith("/proxy/"))
             {
-                #region decryptLink
-                ProxyLinkModel decryptLink = null;
-
-                if (AppInit.conf.serverproxy.encrypt)
+                #region tmdb proxy
+                if (servUri.Contains(".themoviedb.org"))
                 {
-                    if (servUri.Contains(".themoviedb.org") || servUri.Contains(".tmdb.org"))
-                    {
-                        if (!AppInit.conf.serverproxy.allow_tmdb)
-                        {
-                            httpContext.Response.StatusCode = 403;
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        decryptLink = CORE.ProxyLink.Decrypt(Regex.Replace(servUri, "(\\?|&).*", ""), reqip);
-                        servUri = decryptLink?.uri;
-                    }
+                    httpContext.Response.Redirect($"/tmdb/api/{Regex.Match(servUri, "https?://[^/]+/(.*)").Groups[1].Value}");
+                    return;
+                }
+                else if (servUri.Contains(".tmdb.org"))
+                {
+                    httpContext.Response.Redirect($"/tmdb/img/{Regex.Match(servUri, "https?://[^/]+/(.*)").Groups[1].Value}");
+                    return;
+                }
+                #endregion
+
+                #region decryptLink
+                ProxyLinkModel decryptLink = CORE.ProxyLink.Decrypt(Regex.Replace(servUri, "(\\?|&).*", ""), reqip);
+
+                if (init.encrypt)
+                {
+                    servUri = decryptLink?.uri;
                 }
                 else
                 {
-                    if (!AppInit.conf.serverproxy.enable)
+                    if (!init.enable)
                     {
                         httpContext.Response.StatusCode = 403;
                         return;
                     }
+
+                    if (decryptLink?.uri != null)
+                        servUri = decryptLink.uri;
                 }
 
                 if (string.IsNullOrWhiteSpace(servUri) || !servUri.StartsWith("http"))
@@ -109,65 +114,27 @@ namespace Lampac.Engine.Middlewares
                     decryptLink = new ProxyLinkModel(reqip, null, null, servUri);
                 #endregion
 
-                #region themoviedb.org
-                if (servUri.Contains(".themoviedb.org") || servUri.Contains(".tmdb.org"))
-                {
-                    var headers = new List<HeadersModel>();
-                    var proxyManager = new ProxyManager("proxyapi_tmdb", AppInit.conf.serverproxy.tmdb);
-
-                    if (!string.IsNullOrEmpty(AppInit.conf.serverproxy.tmdb.API_IP))
-                    {
-                        headers.Add(new HeadersModel("Host", "api.themoviedb.org"));
-                        servUri = servUri.Replace("api.themoviedb.org", AppInit.conf.serverproxy.tmdb.API_IP);
-                    }
-
-                    string json = await CORE.HttpClient.Get(servUri, proxy: proxyManager.Get(), headers: headers);
-                    if (json == null) 
-                    {
-                        proxyManager.Refresh();
-                        httpContext.Response.Redirect(servUri);
-                        return;
-                    }
-
-                    httpContext.Response.ContentType = "application/json;charset=utf-8";
-                    await httpContext.Response.WriteAsync(json, httpContext.RequestAborted);
-                    return;
-                }
-                #endregion
-
-                if (AppInit.conf.serverproxy.showOrigUri)
+                if (init.showOrigUri)
                     httpContext.Response.Headers.Add("PX-Orig", decryptLink.uri);
 
                 #region Кеш файла
                 string md5file = httpContext.Request.Path.Value.Replace("/proxy/", "");
                 bool ists = md5file.EndsWith(".ts") || md5file.EndsWith(".m4s");
 
-                string md5key = CORE.CrypTo.md5(ists ? fixuri(decryptLink) : decryptLink.uri);
-                bool cache_stream = !string.IsNullOrEmpty(md5key) && md5key.Length > 3 && AppInit.conf.serverproxy.encrypt && AppInit.conf.serverproxy.cache.hls;
+                string md5key = ists ? fixuri(decryptLink) : CORE.CrypTo.md5(decryptLink.uri);
+                bool cache_stream = ists && !string.IsNullOrEmpty(md5key) && md5key.Length > 3;
 
                 string foldercache = cache_stream ? $"cache/hls/{md5key.Substring(0, 3)}" : string.Empty;
                 string cachefile = cache_stream ? ($"{foldercache}/{md5key.Substring(3)}" + Path.GetExtension(md5file)) : string.Empty;
 
                 if (cache_stream && File.Exists(cachefile))
                 {
-                    httpContext.Response.Headers.Add("PX-Cache", "HIT");
-
-                    if (md5file.EndsWith(".m3u8"))
+                    using (var fileStream = new FileStream(cachefile, FileMode.Open, FileAccess.Read))
                     {
-                        string hls = editm3u(File.ReadAllText(cachefile), httpContext, decryptLink);
-
-                        httpContext.Response.ContentType = "application/vnd.apple.mpegurl";
-                        httpContext.Response.ContentLength = hls.Length;
-                        await httpContext.Response.WriteAsync(hls, httpContext.RequestAborted).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        using (var fileStream = new FileStream(cachefile, FileMode.Open, FileAccess.Read))
-                        {
-                            httpContext.Response.ContentType = ists ? (md5file.EndsWith(".m4s") ? "video/mp4" : "video/mp2t") : "text/plain";
-                            httpContext.Response.ContentLength = fileStream.Length;
-                            await fileStream.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted);
-                        }
+                        httpContext.Response.Headers.Add("PX-Cache", "HIT");
+                        httpContext.Response.ContentType = md5file.EndsWith(".m4s") ? "video/mp4" : "video/mp2t";
+                        httpContext.Response.ContentLength = fileStream.Length;
+                        await fileStream.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted).ConfigureAwait(false);
                     }
 
                     return;
@@ -192,8 +159,8 @@ namespace Lampac.Engine.Middlewares
 
                 using (var client = decryptLink.proxy != null ? new HttpClient(handler) : _httpClientFactory.CreateClient("proxy"))
                 {
-                    var request = CreateProxyHttpRequest(httpContext, decryptLink.headers, new Uri(servUri), httpContext.Request.Path.Value.Contains(".m3u") || httpContext.Request.Path.Value.Contains(".ts"));
-                    var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, httpContext.RequestAborted);
+                    var request = CreateProxyHttpRequest(httpContext, decryptLink.headers, new Uri(servUri), Regex.IsMatch(httpContext.Request.Path.Value, "\\.(m3u|ts|m4s|mp4|mkv|aacp|srt|vtt)", RegexOptions.IgnoreCase));
+                    var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, httpContext.RequestAborted).ConfigureAwait(false);
 
                     if ((int)response.StatusCode is 301 or 302 or 303 or 0 || response.Headers.Location != null)
                     {
@@ -207,29 +174,27 @@ namespace Lampac.Engine.Middlewares
                         #region m3u8/txt
                         using (HttpContent content = response.Content)
                         {
-                            if (response.StatusCode == HttpStatusCode.OK)
+                            if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.PartialContent)
                             {
-                                if (response.Content.Headers.ContentLength > 625000)
+                                if (response.Content.Headers.ContentLength > init.maxlength_m3u)
                                 {
+                                    httpContext.Response.StatusCode = 502;
                                     httpContext.Response.ContentType = "text/plain";
                                     await httpContext.Response.WriteAsync("bigfile", httpContext.RequestAborted).ConfigureAwait(false);
                                     return;
                                 }
 
-                                string m3u8 = Encoding.UTF8.GetString(await content.ReadAsByteArrayAsync(httpContext.RequestAborted));
-                                string hls = editm3u(m3u8, httpContext, decryptLink);
-
-                                if (cache_stream && !File.Exists(cachefile))
+                                var array = await content.ReadAsByteArrayAsync(httpContext.RequestAborted).ConfigureAwait(false);
+                                if (array == null)
                                 {
-                                    try
-                                    {
-                                        Directory.CreateDirectory(foldercache);
-                                        File.WriteAllText(cachefile, m3u8);
-                                    }
-                                    catch { try { File.Delete(cachefile); } catch { } }
+                                    httpContext.Response.StatusCode = 502;
+                                    await httpContext.Response.WriteAsync("error proxy m3u8", httpContext.RequestAborted).ConfigureAwait(false);
                                 }
 
-                                httpContext.Response.Headers.Add("PX-Cache", cache_stream ? "MISS" : "BYPASS");
+                                string m3u8 = Encoding.UTF8.GetString(array);
+                                string hls = editm3u(m3u8, httpContext, decryptLink);
+
+                                httpContext.Response.StatusCode = (int)response.StatusCode;
                                 httpContext.Response.ContentType = contentType == null ? "application/vnd.apple.mpegurl" : contentType.First();
                                 httpContext.Response.ContentLength = hls.Length;
                                 await httpContext.Response.WriteAsync(hls, httpContext.RequestAborted).ConfigureAwait(false);
@@ -249,22 +214,28 @@ namespace Lampac.Engine.Middlewares
                         {
                             if (response.StatusCode == HttpStatusCode.OK)
                             {
-                                if (response.Content.Headers.ContentLength > 625000)
+                                if (response.Content.Headers.ContentLength > init.maxlength_m3u)
                                 {
                                     httpContext.Response.ContentType = "text/plain";
                                     await httpContext.Response.WriteAsync("bigfile", httpContext.RequestAborted).ConfigureAwait(false);
                                     return;
                                 }
 
-                                string mpd = Encoding.UTF8.GetString(await content.ReadAsByteArrayAsync(httpContext.RequestAborted));
+                                var array = await content.ReadAsByteArrayAsync(httpContext.RequestAborted).ConfigureAwait(false);
+                                if (array == null)
+                                {
+                                    httpContext.Response.StatusCode = 502;
+                                    await httpContext.Response.WriteAsync("error proxy m3u8", httpContext.RequestAborted).ConfigureAwait(false);
+                                }
+
+                                string mpd = Encoding.UTF8.GetString(array);
                                 string baseURL = Regex.Match(mpd, "<BaseURL>([^<]+)</BaseURL>").Groups[1].Value;
 
                                 string dashkey = CORE.CrypTo.md5(DateTime.Now.ToBinary().ToString());
-                                memoryCache.Set($"proxy-dash:{dashkey}:{(AppInit.conf.serverproxy.verifyip ? reqip : "")}", baseURL, DateTime.Now.AddHours(8));
+                                memoryCache.Set($"proxy-dash:{dashkey}:{(init.verifyip ? reqip : "")}", baseURL, DateTime.Now.AddHours(8));
 
                                 mpd = Regex.Replace(mpd, baseURL, $"{AppInit.Host(httpContext)}/proxy-dash/{dashkey}/");
 
-                                httpContext.Response.Headers.Add("PX-Cache", "BYPASS");
                                 httpContext.Response.ContentType = contentType == null ? "application/dash+xml" : contentType.First();
                                 httpContext.Response.ContentLength = mpd.Length;
                                 await httpContext.Response.WriteAsync(mpd, httpContext.RequestAborted).ConfigureAwait(false);
@@ -282,10 +253,11 @@ namespace Lampac.Engine.Middlewares
                         #region ts
                         using (HttpContent content = response.Content)
                         {
-                            if (response.StatusCode == HttpStatusCode.OK)
+                            if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.PartialContent)
                             {
-                                if (response.Content.Headers.ContentLength > 10_000000)
+                                if (response.Content.Headers.ContentLength > init.maxlength_ts)
                                 {
+                                    httpContext.Response.StatusCode = 502;
                                     httpContext.Response.ContentType = "text/plain";
                                     await httpContext.Response.WriteAsync("bigfile", httpContext.RequestAborted).ConfigureAwait(false);
                                     return;
@@ -293,29 +265,28 @@ namespace Lampac.Engine.Middlewares
 
                                 byte[] buffer = await content.ReadAsByteArrayAsync(httpContext.RequestAborted).ConfigureAwait(false);
 
-                                if (!File.Exists(cachefile))
-                                {
-                                    _ = Task.Factory.StartNew(() =>
-                                    {
-                                        try
-                                        {
-                                            Directory.CreateDirectory(foldercache);
-                                            File.WriteAllBytes(cachefile, buffer);
-                                        }
-                                        catch { try { File.Delete(cachefile); } catch { } }
-
-                                    }, httpContext.RequestAborted, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-                                }
-
+                                httpContext.Response.StatusCode = (int)response.StatusCode;
                                 httpContext.Response.Headers.Add("PX-Cache", "MISS");
                                 httpContext.Response.ContentType = md5file.EndsWith(".m4s") ? "video/mp4" : "video/mp2t";
                                 httpContext.Response.ContentLength = buffer.Length;
                                 await httpContext.Response.Body.WriteAsync(buffer, httpContext.RequestAborted).ConfigureAwait(false);
+
+                                try
+                                {
+                                    if (!File.Exists(cachefile))
+                                    {
+                                        Directory.CreateDirectory(foldercache);
+
+                                        using (var fileStream = new FileStream(cachefile, FileMode.Create, FileAccess.Write, FileShare.None))
+                                            await fileStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                                    }
+                                }
+                                catch { try { File.Delete(cachefile); } catch { } }
                             }
                             else
                             {
                                 httpContext.Response.StatusCode = (int)response.StatusCode;
-                                await httpContext.Response.WriteAsync("error proxy ts", httpContext.RequestAborted);
+                                await httpContext.Response.WriteAsync("error proxy ts", httpContext.RequestAborted).ConfigureAwait(false);
                             }
                         }
                         #endregion
@@ -420,132 +391,30 @@ namespace Lampac.Engine.Middlewares
         string fixuri(ProxyLinkModel decryptLink)
         {
             string uri = decryptLink.uri;
+            var confs = AppInit.conf.serverproxy?.cache?.hls;
 
-            if (decryptLink.plugin == "fph" && uri.Contains("media="))
+            if (confs != null && confs.Count >= 0)
             {
-                // https://ip222728867.ahcdn.com/key=Tr8UEBCyKFNoqh9X4exL1A,s=,end=1696892400/data=5.61.39.226/state=ZSROBT0n/reftag=187656082/media=hls4/58/21/4/321917114.mp4/seg-3-v1-a1.ts
-                string uts = Regex.Match(uri, "media=([^\\?&]+\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
+                foreach (var conf in confs)
+                {
+                    if (!conf.enable || decryptLink.plugin != conf.plugin || conf.tasks == null)
+                        continue;
 
-            if (decryptLink.plugin == "xmr")
-            {
-                if (uri.Contains("media="))
-                {
-                    // https://video-lm-b.xhcdn.com/token=nva=1698775200~dirs=5~hash=02580a8e66a351d21a21d/media=hls4/multi=256x144:144p,426x240:240p,854x480:480p,1280x720:720p,1920x1080:1080p/023/904/044/144p.h264.mp4/seg-1-v1-a1.ts
-                    string uts = Regex.Match(uri, "media=([^\\?&]+\\.ts)").Groups[1].Value;
-                    if (!string.IsNullOrEmpty(uts))
-                        return $"{decryptLink.plugin}:{uts}";
-                }
-                else
-                {
-                    // https://1-1427-19-18.b.cdn13.com/hls/bsd/4000/sd/4000/023/940/081/1080p.h264.mp4/seg-15-v1-a1.ts?cdn_hash=db6e0bf5c899702777e0852f5a5c8dba&cdn_creation_time=1698762516&cdn_ttl=14400&cdn_cv_data=2a06%3A98c0%3A3600%3A%3A103-dvp
-                    uri = Regex.Replace(uri, "^https?://[^/]+", "");
-                    uri = Regex.Replace(uri, "\\?.*", "");
-                    return $"{decryptLink.plugin}:{uri}";
+                    string key = uri;
+                    foreach (var task in conf.tasks)
+                    {
+                        if (task.type == "match")
+                            key = Regex.Match(key, task.pattern, RegexOptions.IgnoreCase).Groups[task.index].Value;
+                        else
+                            key = Regex.Replace(key, task.pattern, task.replacement, RegexOptions.IgnoreCase);
+                    }
+
+                    if (string.IsNullOrEmpty(key) || uri == key)
+                        continue;
+
+                    return CORE.CrypTo.md5($"{decryptLink.plugin}:{key}");
                 }
             }
-
-            if (decryptLink.plugin is "phubprem" or "phub")
-            {
-                // https://dv-h.phprcdn.com/hls/videos/202301/27/424213491/,1080P_4000K,720P_4000K,480P_2000K,240P_1000K,_424213491.mp4.urlset/seg-5-f2-v1-a1.ts?ttl=1697014995&l=0&ipa=5.61.39.226&hash=e75580dd8920bc61ccbe9c311612771d
-                uri = Regex.Replace(uri, "^https?://[^/]+", "");
-                uri = Regex.Replace(uri, "\\?.*", "");
-                return $"{decryptLink.plugin}:{uri}";
-            }
-
-            if ((decryptLink.plugin is "xdsred" or "xds" or "xnx") && uri.Contains(","))
-            {
-                // https://video-cdn77-premium.xvideos-cdn.com/U9-cvOnM-E9JjyZymkikpg==,1699185782/videos/hls/60/60/ea/6060eaea4f92b9ffdab6120b826199d4/hls-1080p-f138b3.ts
-                // https://vid-egc.xvideos-cdn.com/Y7mtJbqRjQbmCC-3LaxkjA==,1698832019/videos/hls/45/8f/f7/458ff790edbf5c0b6265d171286b270f/hls-250p-87b140.ts
-                string uts = Regex.Match(uri, ",([0-9]+/videos/[^\\?&]+\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
-
-            if (decryptLink.plugin == "kodik")
-            {
-                // https://glory.cloud.kodik-storage.com/useruploads/29e5fcf9-a27b-4a32-81c6-5f971e574bf3/adafe955bbed673178a73f76cbb9578f:2023120514/./720.mp4:hls:seg-19-v1-a1.ts
-                // https://glory.cloud.kodik-storage.com/useruploads/29e5fcf9-a27b-4a32-81c6-5f971e574bf3/adafe955bbed673178a73f76cbb9578f:2023120514/720.mp4:hls:seg-1-v1-a1.ts
-                var g = Regex.Match(uri, "/useruploads/([^/]+)/[^/]+/(.*\\.ts)").Groups;
-                if (!string.IsNullOrEmpty(g[1].Value) && !string.IsNullOrEmpty(g[2].Value))
-                    return $"{decryptLink.plugin}:{g[1].Value}:{g[2].Value}";
-            }
-
-            if (decryptLink.plugin == "vcdn")
-            {
-                // https://mystic.cloud.cdnland.in/5fd0c7ccf5c248e2f17632e5ee7ed2a0:2023120611/animetvseries/6cfb3c44adf0705fe1997aa5b44f0872671a169d/720.mp4:hls:seg-1-v1-a1.ts
-                string uts = Regex.Match(uri, "https?://[^/]+/[^/]+/(.*\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
-
-            if (decryptLink.plugin == "videodb")
-            {
-                // https://glory.videokinoplay1.online/animetvseries/f3b391fb97f442eeb760ea1e961d0aff6f2e6190/e88b91a3a4103e1548ebffa4053b75e7:2023120623/1080.mp4:hls:seg-1-v1-a1.ts
-                // https://iridium.videokinoplay1.online/movies/71416328961755e50401b511ebc3a5ff0399b013/34b7292ade3dccdaaa9514c7229f158e:2023120714/1080.mp4:hls:seg-1-v1-a1.ts
-                var g = Regex.Match(uri, "https?://[^/]+/([^/]+/[^/]+)/[^/]+/(.*\\.ts)").Groups;
-                if (!string.IsNullOrEmpty(g[1].Value) && !string.IsNullOrEmpty(g[2].Value))
-                    return $"{decryptLink.plugin}:{g[1].Value}:{g[2].Value}";
-            }
-
-            if (decryptLink.plugin is "rezka" or "voidboost")
-            {
-                // https://broadway.stream.voidboost.cc/ae6235dd062c2bc5e80bec676c9c86ab:2023120807:dmoxckFDWWR2eTJPWFhFcTE0TkZobFprVEtXMnUrdnN5QThmUWoxRFc4TEpZcjZjeXZETXdRNklsdnF5MTdqSDRGRlNud2pnNlpXSjZsdTQybWROUk1RVEc1bUpTSXBIOC8wWkYvMlFVRjQ9/9/6/4/3/9/0/lmrw7.mp4:hls:seg-2-v1-a1.ts
-                string uts = Regex.Match(uri, "https?://[^/]+/[^/]+/(.*\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
-
-            if (decryptLink.plugin == "zetflix")
-            {
-                // https://glory.prosto.hdvideobox.me/f89eb821ed9784dd4e22516075e35cbd:2023120623/animetvseries/28eba2e8ccb33547c20eacdc7d51c5e81ce447be/1080.mp4:hls:seg-1-v1-a1.ts
-                string uts = Regex.Match(uri, "https?://[^/]+/[^/]+/(.*\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
-
-            if (decryptLink.plugin == "anilibria")
-            {
-                // https://cache.libria.fun/videos/media/ts/9261/1/1080/521c1f3960f35ce521b2a41b3ac9d381_00033.ts
-                // https://cache-cloud21.libria.fun/videos/media/ts/9261/1/1080/521c1f3960f35ce521b2a41b3ac9d381_00033.ts?expires=1701782505&extra=Lu6IAwHxxH22omYfHVFHhA
-                uri = Regex.Replace(uri, "^https?://[^/]+", "");
-                uri = Regex.Replace(uri, "\\?.*", "");
-                return $"{decryptLink.plugin}:{uri}";
-            }
-
-            if (decryptLink.plugin is "ashdi" or "eneyida" or "animebesst" or"animedia" or "animego" or "redheadsound")
-            {
-                // https://s1.ashdi.vip/content/stream/serials/chainsaw_man_gweanmaslinka/chainsaw_man__01_webdl_1080p_hevc_aac_ukr_dvo_76967/hls/1080/segment73.ts
-                // https://kraken.tortuga.wtf/content/stream/films/fall_2022_bdrip_1080p_82657/hls/1080/segment1.ts
-                // https://tv.anime1.best/content/vod/serials/wan_jie_du_zun/s01/wan_jie_du_zun__01_tv_1_150/hls/480/segment1084.ts
-                // https://hls.animedia.tv/dir220/1601680190ba8319ddd61df944691352b601445e2576d1601d/3_0000.ts
-                // https://sophia.yagami-light.com/qv/QVWMBPZgdxD/mEkqvLgk5aeAgwqUyUbvqE3hjxriFY_chunk_6_00005.m4s
-                // https://redheadsound.video/storage/2433a07a/hls/stream_0/data329.ts
-                uri = Regex.Replace(uri, "^https?://[^/]+", "");
-                return $"{decryptLink.plugin}:{uri}";
-            }
-
-            if (decryptLink.plugin == "alloha")
-            {
-                // https://9bc-a3e-2200g0.v.plground.live:10402/hs/48/1702570110/UbO54o740twlR1ghiUWJxQ/67/669067/4/seg-45-f1-v1-sa4-a1.ts
-                string uts = Regex.Match(uri, "https?://[^/]+/[^/]+/[^/]+/[^/]+/[^/]+/(.*\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
-
-            if (decryptLink.plugin is "collaps" or "hdvb")
-            {
-                // https://fazhzcddzec.takedwn.ws/10_12_22/10/12/11/EOAUKCA7/BXWSCUZU.mp4/seg-38-a1.ts?x-cdn=10551403
-                // https://cdn4571.vb17123filippaaniketos.pw/vod/3e484719f3134616e92025dd5bae8c30/1080/segment80.ts?md5=qlrvhGkM2s0eTM6wiaee_g&expires=1702558288
-                string uts = Regex.Match(uri, "https?://[^/]+/(.*\\.ts)").Groups[1].Value;
-                if (!string.IsNullOrEmpty(uts))
-                    return $"{decryptLink.plugin}:{uts}";
-            }
-
-            if (!string.IsNullOrEmpty(AppInit.conf.serverproxy.cache.hls_pattern) && Regex.IsMatch(uri, AppInit.conf.serverproxy.cache.hls_pattern, RegexOptions.IgnoreCase))
-                return $"{decryptLink.plugin}:{Regex.Replace(uri, "^https?://[^/]+", "")}";
 
             return null;
         }
@@ -553,7 +422,7 @@ namespace Lampac.Engine.Middlewares
 
 
         #region CreateProxyHttpRequest
-        HttpRequestMessage CreateProxyHttpRequest(HttpContext context, List<HeadersModel> headers, Uri uri, bool ishls)
+        HttpRequestMessage CreateProxyHttpRequest(HttpContext context, List<HeadersModel> headers, Uri uri, bool ismedia)
         {
             var request = context.Request;
 
@@ -567,11 +436,31 @@ namespace Lampac.Engine.Middlewares
             }
 
             #region Headers
-            if (!ishls)
+            if (headers != null && headers.Count > 0)
+            {
+                foreach (var item in headers)
+                    requestMessage.Headers.TryAddWithoutValidation(item.name, item.val);
+            }
+
+            if (ismedia)
             {
                 foreach (var header in request.Headers)
                 {
-                    if (header.Key.ToLower() is "origin" or "user-agent" or "referer" or "content-disposition")
+                    if (header.Key.ToLower() is "range")
+                    {
+                        if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()) && requestMessage.Content != null)
+                            requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
+                    }
+                }
+            }
+            else
+            {
+                foreach (var header in request.Headers)
+                {
+                    if (header.Key.ToLower() is "host" or "origin" or "user-agent" or "referer" or "content-disposition" or "accept-encoding")
+                        continue;
+
+                    if (header.Key.ToLower().StartsWith("x-"))
                         continue;
 
                     if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()) && requestMessage.Content != null)
@@ -580,12 +469,6 @@ namespace Lampac.Engine.Middlewares
                         requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
                     }
                 }
-            }
-
-            if (headers != null && headers.Count > 0)
-            {
-                foreach (var item in headers)
-                    requestMessage.Headers.TryAddWithoutValidation(item.name, item.val);
             }
 
             if (!requestMessage.Headers.Contains("User-Agent"))

@@ -14,21 +14,15 @@ namespace Lampac.Controllers.LITE
         [Route("lite/ashdi")]
         async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, int t = -1, int s = -1, bool origsource = false, bool rjson = false)
         {
-            var init = loadKit(AppInit.conf.Ashdi.Clone(), i => i.Ashdi);
-            if (!init.enable || kinopoisk_id == 0)
+            var init = await loadKit(AppInit.conf.Ashdi);
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
+
+            if (kinopoisk_id == 0)
                 return OnError();
 
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
             reset: var rch = new RchClient(HttpContext, host, init, requestInfo);
-            var proxyManager = new ProxyManager("ashdi", init);
+            var proxyManager = new ProxyManager(init);
             var proxy = proxyManager.Get();
 
             var oninvk = new AshdiInvoke
@@ -36,7 +30,7 @@ namespace Lampac.Controllers.LITE
                host,
                init.corsHost(),
                ongettourl => rch.enable ? rch.Get(init.cors(ongettourl), httpHeaders(init)) : HttpClient.Get(init.cors(ongettourl), timeoutSeconds: 8, proxy: proxy, headers: httpHeaders(init), statusCodeOK: false),
-               streamfile => HostStreamProxy(init, streamfile, proxy: proxy, plugin: "ashdi"),
+               streamfile => HostStreamProxy(init, streamfile, proxy: proxy),
                requesterror: () => { if (!rch.enable) { proxyManager.Refresh(); } }
             );
 
@@ -51,7 +45,7 @@ namespace Lampac.Controllers.LITE
             if (IsRhubFallback(cache, init))
                 goto reset;
 
-            return OnResult(cache, () => oninvk.Html(cache.Value, kinopoisk_id, title, original_title, t, s, rjson: rjson), origsource: origsource, gbcache: !rch.enable);
+            return OnResult(cache, () => oninvk.Html(cache.Value, kinopoisk_id, title, original_title, t, s, vast: init.vast, rjson: rjson), origsource: origsource, gbcache: !rch.enable);
         }
     }
 }

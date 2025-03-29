@@ -2,11 +2,12 @@
 
 namespace Lampac.Models.LITE
 {
-    public class RezkaSettings : BaseSettings
+    public class RezkaSettings : BaseSettings, ICloneable
     {
-        public RezkaSettings(string host, bool streamproxy = false)
+        public RezkaSettings(string plugin, string host, bool streamproxy = false)
         {
             enable = true;
+            this.plugin = plugin;
             this.streamproxy = streamproxy;
 
             if (host != null)
@@ -20,8 +21,6 @@ namespace Lampac.Models.LITE
 
         public bool premium { get; set; }
 
-        public string? cookie { get; set; }
-
         public string? uacdn { get; set; }
 
         public bool forceua { get; set; }
@@ -30,11 +29,15 @@ namespace Lampac.Models.LITE
 
         public bool xapp { get; set; }
 
-        public bool hls { get; set; }
 
         public RezkaSettings Clone()
         {
             return (RezkaSettings)MemberwiseClone();
+        }
+
+        object ICloneable.Clone()
+        {
+            return MemberwiseClone();
         }
     }
 }

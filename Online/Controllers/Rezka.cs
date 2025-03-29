@@ -11,28 +11,26 @@ using System.Collections.Generic;
 using Lampac.Models.LITE;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.RegularExpressions;
+using System.Net;
 
 namespace Lampac.Controllers.LITE
 {
     public class Rezka : BaseOnlineController
     {
         #region InitRezkaInvoke
-        async public ValueTask<RezkaInvoke> InitRezkaInvoke()
+        async public ValueTask<RezkaInvoke> InitRezkaInvoke(RezkaSettings init)
         {
-            var init = AppInit.conf.Rezka;
-
-            var proxyManager = new ProxyManager("rezka", init);
+            var proxyManager = new ProxyManager(init);
             var proxy = proxyManager.Get();
 
-            var headers = httpHeaders(init, HeadersModel.Init(
-                ("Origin", init.host),
-                ("Referer", init.host + "/")
-            ));
+            string country = init.forceua ? "UA" : requestInfo.Country;
+            var rch = new RchClient(HttpContext, host, init, requestInfo, keepalive: -1);
 
-            string cookie = await getCookie(init);
+            var headers = httpHeaders(init);
+            var cookie = await getCookie(init);
 
-            if (!string.IsNullOrEmpty(cookie))
-                headers.Add(new HeadersModel("Cookie", cookie));
+            if (rch.enable && cookie != null)
+                headers.Add(new HeadersModel("Cookie", rhubCookie));
 
             if (init.xapp)
                 headers.Add(new HeadersModel("X-App-Hdrezka-App", "1"));
@@ -40,21 +38,39 @@ namespace Lampac.Controllers.LITE
             if (init.xrealip)
                 headers.Add(new HeadersModel("realip", requestInfo.IP));
 
-            string country = init.forceua ? "UA" : requestInfo.Country;
-            var rch = new RchClient(HttpContext, host, init, requestInfo, keepalive: -1);
-
             return new RezkaInvoke
             (
                 host,
                 init.corsHost(),
                 init.scheme,
                 MaybeInHls(init.hls, init),
-                authCookie != null || !string.IsNullOrEmpty(init.cookie),
-                ongettourl => rch.enable ? rch.Get(ongettourl, headers) : HttpClient.Get(init.cors(ongettourl), timeoutSeconds: 8, proxy: proxy, headers: headers, statusCodeOK: false),
-                (url, data) => rch.enable ? rch.Post(url, data, headers) : HttpClient.Post(init.cors(url), data, timeoutSeconds: 8, proxy: proxy, headers: headers),
-                streamfile => HostStreamProxy(init, RezkaInvoke.fixcdn(country, init.uacdn, streamfile), proxy: proxy, plugin: "rezka"),
+                init.premium,
+                (url, hed) => rch.enable ? rch.Get(url, HeadersModel.Join(hed, headers)) : 
+                                           HttpClient.Get(init.cors(url), timeoutSeconds: 8, proxy: proxy, headers: HeadersModel.Join(hed, headers), cookieContainer: cookieContainer, statusCodeOK: false),
+                (url, data, hed) => rch.enable ? rch.Post(url, data, HeadersModel.Join(hed, headers)) : 
+                                                 HttpClient.Post(init.cors(url), data, timeoutSeconds: 8, proxy: proxy, headers: HeadersModel.Join(hed, headers), cookieContainer: cookieContainer),
+                streamfile => HostStreamProxy(init, RezkaInvoke.fixcdn(country, init.uacdn, streamfile), proxy: proxy, headers: RezkaInvoke.StreamProxyHeaders(init.host)),
                 requesterror: () => proxyManager.Refresh()
             );
+        }
+        #endregion
+
+        #region Initialization
+        ValueTask<RezkaSettings> Initialization()
+        {
+            return loadKit(AppInit.conf.Rezka, (j, i, c) =>
+            {
+                if (j.ContainsKey("premium"))
+                    i.premium = c.premium;
+
+                if (j.ContainsKey("uacdn"))
+                    i.uacdn = c.uacdn;
+
+                if (j.ContainsKey("forceua"))
+                    i.forceua = c.forceua;
+
+                return i;
+            });
         }
         #endregion
 
@@ -62,18 +78,12 @@ namespace Lampac.Controllers.LITE
         [Route("lite/rezka")]
         async public Task<ActionResult> Index(long kinopoisk_id, string imdb_id, string title, string original_title, int clarification, int year, int s = -1, string href = null, bool rjson = false, int serial = -1)
         {
-            var init = AppInit.conf.Rezka;
-            if (!init.enable)
-                return OnError();
+            var init = await Initialization();
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
 
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
+            if (init.premium || AppInit.conf.RezkaPrem.enable) 
+                return ShowError("Замените Rezka на RezkaPrem в init.conf");
 
             if (string.IsNullOrWhiteSpace(href) && (string.IsNullOrWhiteSpace(title) || year == 0))
                 return OnError();
@@ -82,7 +92,7 @@ namespace Lampac.Controllers.LITE
             if (rch.IsNotConnected())
                 return ContentTo(rch.connectionMsg);
 
-            if (!init.premium && rch.enable)
+            if (rch.enable)
             {
                 if (rch.IsNotSupport("web", out string rch_error))
                     return ShowError($"Нужен HDRezka Premium<br>{init.host}/payments/");
@@ -92,13 +102,13 @@ namespace Lampac.Controllers.LITE
                     if (rch.InfoConnected().rchtype != "apk")
                         return ShowError($"Нужен HDRezka Premium<br>{init.host}/payments/");
 
-                    if (string.IsNullOrEmpty(await getCookie(init)))
+                    if (await getCookie(init) == null)
                         return ShowError("Укажите логин/пароль или cookie");
                 }
             }
 
-            var oninvk = await InitRezkaInvoke();
-            var proxyManager = new ProxyManager("rezka", init);
+            var oninvk = await InitRezkaInvoke(init);
+            var proxyManager = new ProxyManager(init);
 
             string memKey = $"rezka:{kinopoisk_id}:{imdb_id}:{title}:{original_title}:{year}:{clarification}:{href}";
             if (!hybridCache.TryGetValue(memKey, out EmbedModel content))
@@ -107,12 +117,12 @@ namespace Lampac.Controllers.LITE
                 if (content == null)
                     return OnError(null, gbcache: !rch.enable);
 
-                if (content.IsEmpty && content.content != null)
-                    return ShowError(content.content);
-
                 proxyManager.Success();
                 hybridCache.Set(memKey, content, cacheTime(20, init: init));
             }
+
+            if (content.IsEmpty && content.content != null)
+                return ShowError(content.content);
 
             return ContentTo(oninvk.Html(content, accsArgs(string.Empty), kinopoisk_id, imdb_id, title, original_title, clarification, year, s, href, true, rjson));
         }
@@ -123,18 +133,15 @@ namespace Lampac.Controllers.LITE
         [Route("lite/rezka/serial")]
         async public Task<ActionResult> Serial(long kinopoisk_id, string imdb_id, string title, string original_title, int clarification,int year, string href, long id, int t, int s = -1, bool rjson = false)
         {
-            var init = AppInit.conf.Rezka;
-            if (!init.enable)
-                return OnError();
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
+            var init = await Initialization();
+            if (await IsBadInitialization(init))
+                return badInitMsg;
 
             if (string.IsNullOrWhiteSpace(href) && (string.IsNullOrWhiteSpace(title) || year == 0))
                 return OnError();
 
-            var oninvk = await InitRezkaInvoke();
-            var proxyManager = new ProxyManager("rezka", init);
+            var oninvk = await InitRezkaInvoke(init);
+            var proxyManager = new ProxyManager(init);
 
             var rch = new RchClient(HttpContext, host, init, requestInfo, keepalive: -1);
             if (rch.IsNotConnected())
@@ -158,15 +165,12 @@ namespace Lampac.Controllers.LITE
         [Route("lite/rezka/movie.m3u8")]
         async public Task<ActionResult> Movie(string title, string original_title, long id, int t, int director = 0, int s = -1, int e = -1, string favs = null, bool play = false)
         {
-            var init = AppInit.conf.Rezka;
-            if (!init.enable)
-                return OnError();
+            var init = await Initialization();
+            if (await IsBadInitialization(init))
+                return badInitMsg;
 
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            var oninvk = await InitRezkaInvoke();
-            var proxyManager = new ProxyManager("rezka", init);
+            var oninvk = await InitRezkaInvoke(init);
+            var proxyManager = new ProxyManager(init);
 
             var rch = new RchClient(HttpContext, host, init, requestInfo, keepalive: s == -1 ? null : -1);
             if (rch.IsNotConnected())
@@ -174,35 +178,102 @@ namespace Lampac.Controllers.LITE
 
             string realip = (init.xrealip && init.corseu) ? requestInfo.IP : "";
 
-            var md = await InvokeCache(rch.ipkey($"rezka:view:get_cdn_series:{id}:{t}:{director}:{s}:{e}:{realip}", proxyManager), cacheTime(20, mikrotik: 1, init: init), () => oninvk.Movie(id, t, director, s, e, favs), proxyManager);
+            var md = await InvokeCache(rch.ipkey($"rezka:view:get_cdn_series:{id}:{t}:{director}:{s}:{e}:{realip}:{init.cookie}", proxyManager), cacheTime(20, mikrotik: 1, init: init), () => oninvk.Movie(id, t, director, s, e, favs), proxyManager);
             if (md == null)
                 return OnError(null, gbcache: !rch.enable);
 
-            string result = oninvk.Movie(md, title, original_title, play);
+            string result = oninvk.Movie(md, title, original_title, play, vast: init.vast);
             if (result == null)
                 return OnError(null, gbcache: !rch.enable);
 
             if (play)
                 return Redirect(result);
 
-            return Content(result, "application/json; charset=utf-8");
+            return ContentTo(result);
         }
         #endregion
 
 
         #region getCookie
-        static string authCookie = null;
+        static string rhubCookie = string.Empty;
+        static CookieContainer cookieContainer = null;
 
-        async ValueTask<string> getCookie(RezkaSettings init)
+        async ValueTask<CookieContainer> getCookie(RezkaSettings init)
         {
-            if (authCookie != null)
-                return authCookie;
+            if (cookieContainer != null)
+                return cookieContainer;
+
+            string domain = Regex.Match(init.host, "https?://([^/]+)").Groups[1].Value;
+
+            #region setCookieContainer
+            void setCookieContainer(string coks)
+            {
+                cookieContainer = new CookieContainer();
+
+                if (coks != string.Empty && !coks.Contains("hdmbbs"))
+                    coks = $"hdmbbs=1; {coks}";
+
+                if (!coks.Contains("dle_user_taken"))
+                    coks = $"dle_user_taken=1; {coks}";
+
+                foreach (string line in coks.Split(";"))
+                {
+                    if (string.IsNullOrEmpty(line) || !line.Contains("="))
+                        continue;
+
+                    var g = Regex.Match(line.Trim(), "^([^=]+)=([^\n\r]+)").Groups;
+                    string name = g[1].Value.Trim();
+                    string value = g[2].Value.Trim();
+
+                    if (name is "CLID" or "MUID" or "_clck" or "_clsk")
+                        continue;
+
+                    if (name.StartsWith("_ym_"))
+                        continue;
+
+                    if (name != "PHPSESSID")
+                        rhubCookie += $"{name}={value}; ";
+
+                    if (name == "hdmbbs")
+                    {
+                        cookieContainer.Add(new Cookie()
+                        {
+                            Path = "/",
+                            Expires = DateTime.Today.AddYears(1),
+                            Domain = domain,
+                            Name = name,
+                            Value = value
+                        });
+                    }
+                    else
+                    {
+                        cookieContainer.Add(new Cookie()
+                        {
+                            Path = "/",
+                            Expires = name == "PHPSESSID" ? default : DateTime.Today.AddYears(1),
+                            Domain = $".{domain}",
+                            Name = name,
+                            Value = value,
+                            HttpOnly = true
+                        });
+                    }
+                }
+
+                rhubCookie = Regex.Replace(rhubCookie.Trim(), ";$", "");
+            }
+            #endregion
 
             if (!string.IsNullOrEmpty(init.cookie))
-                return $"dle_user_taken=1; {Regex.Match(init.cookie, "(dle_user_id=[^;]+;)")} {Regex.Match(init.cookie, "(dle_password=[^;]+)")}".Trim();
+            {
+                setCookieContainer(init.cookie.Trim());
+                return cookieContainer;
+            }
 
             if (string.IsNullOrEmpty(init.login) || string.IsNullOrEmpty(init.passwd))
-                return null;
+            {
+                setCookieContainer(string.Empty);
+                return cookieContainer;
+            }
 
             if (memoryCache.TryGetValue("rezka:login", out _))
                 return null;
@@ -242,15 +313,29 @@ namespace Lampac.Controllers.LITE
                                     if (string.IsNullOrEmpty(line))
                                         continue;
 
-                                    if (line.Contains("=deleted;"))
+                                    if (line.Contains("=deleted;") || !line.Contains(domain))
                                         continue;
 
-                                    if (line.Contains("dle_user_id") || line.Contains("dle_password"))
-                                        cookie += $"{line.Split(";")[0]}; ";
+                                    string c = line.Split(";")[0];
+                                    if (c.Contains("="))
+                                    {
+                                        string name = c.Split("=")[0];
+                                        if (cookie.Contains(name))
+                                        {
+                                            cookie = Regex.Replace(cookie, $"{name}=[^;]+", $"{name}={c.Split("=")[1]}");
+                                        }
+                                        else
+                                        {
+                                            cookie += $"{c}; ";
+                                        }
+                                    }
                                 }
 
                                 if (cookie.Contains("dle_user_id") && cookie.Contains("dle_password"))
-                                    authCookie = $"dle_user_taken=1; {Regex.Replace(cookie.Trim(), ";$", "")}";
+                                {
+                                    setCookieContainer(cookie.Trim());
+                                    return cookieContainer;
+                                }
                             }
                         }
                     }
@@ -258,7 +343,7 @@ namespace Lampac.Controllers.LITE
             }
             catch { }
 
-            return authCookie;
+            return null;
         }
         #endregion
     }

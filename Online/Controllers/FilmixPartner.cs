@@ -15,7 +15,6 @@ using Shared.Model.Online;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
-using Microsoft.Extensions.Caching.Memory;
 
 namespace Lampac.Controllers.LITE
 {
@@ -25,19 +24,9 @@ namespace Lampac.Controllers.LITE
         [Route("lite/fxapi")]
         async public Task<ActionResult> Index(long kinopoisk_id, bool checksearch, string title, string original_title, int year, int postid, int t = -1, int s = -1, bool rjson = false)
         {
-            var init = AppInit.conf.FilmixPartner;
-
-            if (!init.enable)
-                return OnError();
-
-            if (init.rhub)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
+            var init = await loadKit(AppInit.conf.FilmixPartner);
+            if (await IsBadInitialization(init, rch: false))
+                return badInitMsg;
 
             if (postid == 0)
             {

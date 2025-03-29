@@ -16,7 +16,7 @@ namespace Lampac.Controllers
         {
 			if (IO.File.ReadAllText("passwd") == "termux")
 			{
-                HttpContext.Response.Cookies.Append("passwd", parol.Trim());
+                HttpContext.Response.Cookies.Append("passwd", "termux");
                 return Redirect("/admin/init");
             }
 
@@ -64,12 +64,14 @@ namespace Lampac.Controllers
 
 <form method=""post"" action=""/admin/auth"" id=""form"">
 	<div>
-		<input type=""text"" name=""parol"" placeholder=""пароль из /home/lampac/passwd or /home/passwd""></input>
+		<input type=""text"" name=""parol"" placeholder=""пароль из passwd""></input>
 	</div>
 	
 	<button type=""submit"">войти</button>
 	
 </form>
+
+<div style=""margin-top: 4em;"">cat /home/lampac/passwd<br><br>docker exec -it lampac cat passwd</div>
 
 </body>
 </html>
@@ -208,6 +210,125 @@ namespace Lampac.Controllers
         public ActionResult InitExample()
         {
             return Content(IO.File.Exists("example.conf") ? IO.File.ReadAllText("example.conf") : string.Empty);
+        }
+        #endregion
+
+        #region sync/init
+        [Route("admin/sync/init")]
+        public ActionResult Synchtml()
+        {
+            string html = @"
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Редактор sync.conf</title>
+</head>
+<body>
+
+<style type=""text/css"">
+	* {
+	    box-sizing: border-box;
+	    outline: none;
+	}
+	body{
+		padding: 40px;
+		font-family: sans-serif;
+	}
+	label{
+		display: block;
+		font-weight: 700;
+		margin-bottom: 8px;
+	}
+	input,
+	textarea,
+	select{
+		width: 100%;
+		padding: 10px;
+	}
+	button{
+		padding: 10px;
+	}
+	form > * + *{
+		margin-top: 30px;
+	}
+</style>
+
+<form method=""post"" action="""" id=""form"">
+	<div>
+		<label>Ваш sync.conf
+		<textarea id=""value"" name=""value"" rows=""30"">{conf}</textarea>
+	</div>
+	
+	<button type=""submit"">Сохранить</button>
+	
+</form>
+
+<script type=""text/javascript"">
+	document.getElementById('form').addEventListener(""submit"", (e) => {
+		let json = document.getElementById('value').value
+
+		e.preventDefault()
+
+		try{
+			let formData = new FormData()
+				formData.append('json', json)
+
+			fetch('/admin/sync/init/save',{
+			    method: ""POST"",
+			    body: formData
+			})
+			.then((response)=>{
+				if (!response.ok) {
+					return response.json().then(err => {
+						throw new Error(err.ex || 'Не удалось сохранить настройки');
+					});
+				}
+				return response.json();
+			 })  
+			.then((data)=>{
+				if (data.success) {
+					alert('Сохранено');
+				} else if (data.error) {
+					throw new Error(data.ex); 
+				} else {
+					throw new Error('Не удалось сохранить настройки'); 
+				}
+			})
+			.catch((e)=>{
+				alert(e.message)
+			})
+		}
+		catch(e){
+			alert('Ошибка: ' + e.message)
+		}
+	})
+</script>
+
+</body>
+</html>
+";
+
+            string conf = IO.File.Exists("sync.conf") ? IO.File.ReadAllText("sync.conf") : string.Empty;
+            return Content(html.Replace("{conf}", conf), contentType: "text/html; charset=utf-8");
+        }
+
+
+        [Route("admin/sync/init/save")]
+        public ActionResult SyncSave([FromForm] string json)
+        {
+            try
+            {
+                string testjson = json.Trim();
+                if (!testjson.StartsWith("{"))
+                    testjson = "{" + testjson + "}";
+
+                JsonConvert.DeserializeObject<AppInit>(testjson);
+
+            }
+            catch (Exception ex) { return Json(new { error = true, ex = ex.Message }); }
+
+            IO.File.WriteAllText("sync.conf", json);
+            return Json(new { success = true });
         }
         #endregion
 

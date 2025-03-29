@@ -4,11 +4,17 @@ DEST="/home/lampac"
 # Become root
 # sudo su -
 apt-get update
-apt-get install -y unzip curl coreutils
+apt-get install -y unzip curl
 apt-get install -y libnss3-dev libgdk-pixbuf2.0-dev libgtk-3-dev libxss-dev libasound2
+apt-get install -y xvfb
+apt-get install -y coreutils
 
 # Install .NET
-curl -L -k -o dotnet-install.sh https://dot.net/v1/dotnet-install.sh
+if ! curl -L -k -o dotnet-install.sh https://dot.net/v1/dotnet-install.sh; then
+   echo "Failed to download dotnet-install.sh. Exiting."
+   exit 1
+fi
+
 chmod 755 dotnet-install.sh
 ./dotnet-install.sh --channel 6.0 --runtime aspnetcore --install-dir /usr/share/dotnet
 ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
@@ -16,7 +22,11 @@ ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
 # Download zip
 mkdir $DEST -p 
 cd $DEST
-curl -L -k -o publish.zip https://github.com/immisterio/Lampac/releases/latest/download/publish.zip
+if ! curl -L -k -o publish.zip https://github.com/immisterio/Lampac/releases/latest/download/publish.zip; then
+   echo "Failed to download publish.zip. Exiting."
+   exit 1
+fi
+
 unzip -o publish.zip
 rm -f publish.zip
 

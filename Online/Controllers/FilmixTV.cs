@@ -23,27 +23,28 @@ namespace Lampac.Controllers.LITE
         [Route("lite/filmixtv")]
         async public Task<ActionResult> Index(string title, string original_title, int clarification, int year, int postid, int t = -1, int? s = null, bool origsource = false, bool rjson = false)
         {
-            var init = AppInit.conf.FilmixTV.Clone();
+            var init = await loadKit(AppInit.conf.FilmixTV, (j, i, c) =>
+            {
+                if (j.ContainsKey("pro"))
+                    i.pro = c.pro;
+                i.user_apitv = c.user_apitv;
+                i.passwd_apitv = c.passwd_apitv;
+                return i;
+            });
 
-            if (!init.enable || string.IsNullOrEmpty(init.user_apitv))
+            if (await IsBadInitialization(init, rch: false))
+                return badInitMsg;
+
+            if (string.IsNullOrEmpty(init.user_apitv))
                 return OnError();
 
-            if (init.rhub)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
-            var proxyManager = new ProxyManager("filmixtv", init);
+            var proxyManager = new ProxyManager(init);
             var proxy = proxyManager.Get();
 
             #region accessToken
             if (string.IsNullOrEmpty(init.token_apitv))
             {
-                var auth = await InvokeCache<string>("filmixtv:accessToken", TimeSpan.FromHours(8), proxyManager, async res =>
+                var auth = await InvokeCache<string>($"filmixtv:accessToken:{init.user_apitv}:{init.passwd_apitv}", TimeSpan.FromHours(8), proxyManager, async res =>
                 {
                     string url_api = $"{init.corsHost()}/api-fx/auth";
                     string data = $"{{\"user_name\":\"{init.user_apitv}\",\"user_passw\":\"{init.passwd_apitv}\"}}";
@@ -90,14 +91,14 @@ namespace Lampac.Controllers.LITE
                 postid = search.Value.id;
             }
 
-            var cache = await InvokeCache<RootObject>($"filmixtv:post:{postid}", cacheTime(20, init: init), proxyManager, inmemory: true, onget: async res =>
+            var cache = await InvokeCache<RootObject>($"filmixtv:post:{postid}:{init.token_apitv}", cacheTime(20, init: init), proxyManager, onget: async res =>
             {
                 string json = await HttpClient.Get($"{init.corsHost()}/api-fx/post/{postid}/video-links", timeoutSeconds: 8, headers: HeadersModel.Init("Authorization", $"Bearer {init.token_apitv}"));
 
                 return oninvk.Post(json);
             });
 
-            return OnResult(cache, () => oninvk.Html(cache.Value, init.pro, postid, title, original_title, t, s), origsource: origsource);
+            return OnResult(cache, () => oninvk.Html(cache.Value, init.pro, postid, title, original_title, t, s, vast: init.vast), origsource: origsource);
         }
     }
 }

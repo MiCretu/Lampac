@@ -35,6 +35,8 @@ namespace Lampac
         #region Startup
         public IConfiguration Configuration { get; }
 
+        public static IServiceCollection serviceCollection { get; private set; }
+
         public static IMemoryCache memoryCache { get; private set; }
 
         public Startup(IConfiguration configuration)
@@ -46,6 +48,8 @@ namespace Lampac
         #region ConfigureServices
         public void ConfigureServices(IServiceCollection services)
         {
+            serviceCollection = services;
+
             #region IHttpClientFactory
             services.AddHttpClient("proxy").ConfigurePrimaryHttpMessageHandler(() =>
             {
@@ -94,9 +98,14 @@ namespace Lampac
                 o.MaximumParallelInvocationsPerClient = 5;
             });
 
-            #region mvcBuilder
             IMvcBuilder mvcBuilder = services.AddControllersWithViews();
 
+            mvcBuilder.AddJsonOptions(options => {
+                //options.JsonSerializerOptions.IgnoreNullValues = true;
+                options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
+            });
+
+            #region Compilation modules
             if (AppInit.modules != null)
             {
                 // mod.dll
@@ -141,7 +150,12 @@ namespace Lampac
                         var syntaxTree = new List<SyntaxTree>();
 
                         foreach (string file in Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories))
+                        {
+                            if (file.Contains("/obj/"))
+                                continue;
+
                             syntaxTree.Add(CSharpSyntaxTree.ParseText(File.ReadAllText(file)));
+                        }
 
                         if (references == null)
                         {
@@ -154,6 +168,19 @@ namespace Lampac
                             references = assemblies.Select(assembly => MetadataReference.CreateFromFile(assembly.Location)).ToList();
                         }
 
+                        if (mod.references != null)
+                        {
+                            foreach (string refns in mod.references)
+                            {
+                                string dlrns = Path.Combine(Environment.CurrentDirectory, "module", mod.dll, refns);
+                                if (File.Exists(dlrns) && references.FirstOrDefault(a => Path.GetFileName(a.FilePath) == refns) == null)
+                                {
+                                    var assembly = Assembly.LoadFrom(dlrns);
+                                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
+                                }
+                            }
+                        }
+
                         CSharpCompilation compilation = CSharpCompilation.Create(Path.GetFileName(mod.dll), syntaxTree, references: references, options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
                         using (var ms = new MemoryStream())
@@ -162,24 +189,21 @@ namespace Lampac
 
                             if (!result.Success)
                             {
-                                Console.WriteLine($"\nError: { mod.dll}");
+                                Console.WriteLine($"\ncompilation error: {mod.dll}");
                                 foreach (var diagnostic in result.Diagnostics)
-                                    Console.WriteLine(diagnostic);
+                                {
+                                    if (diagnostic.Severity == DiagnosticSeverity.Error)
+                                        Console.WriteLine(diagnostic);
+                                }
+                                Console.WriteLine();
                             }
                             else
                             {
                                 ms.Seek(0, SeekOrigin.Begin);
                                 mod.assembly = Assembly.Load(ms.ToArray());
 
-                                if (mod.initspace != null && mod.assembly.GetType(mod.initspace) is Type t && t.GetMethod("loaded") is MethodInfo m)
-                                {
-                                    if (mod.version == 2)
-                                        m.Invoke(null, new object[] { new InitspaceModel() { path = $"module/{mod.dll}" } });
-                                    else
-                                        m.Invoke(null, new object[] { });
-                                }
-
                                 Console.WriteLine("compilation module: " + mod.dll);
+                                mod.index = mod.index != 0 ? mod.index : (100 + AppInit.modules.Count);
                                 AppInit.modules.Add(mod);
                                 mvcBuilder.AddApplicationPart(mod.assembly);
                             }
@@ -208,12 +232,10 @@ namespace Lampac
                 }
             }
 
-            Console.WriteLine();
+            if (AppInit.modules != null)
+                AppInit.modules = AppInit.modules.OrderBy(i => i.index).ToList();
 
-            mvcBuilder.AddJsonOptions(options => {
-                //options.JsonSerializerOptions.IgnoreNullValues = true;
-                options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
-            });
+            Console.WriteLine();
             #endregion
         }
         #endregion
@@ -227,6 +249,31 @@ namespace Lampac
             ProxyManager.Configure(memory);
             HttpClient.httpClientFactory = httpClientFactory;
 
+            #region modules loaded
+            if (AppInit.modules != null)
+            {
+                foreach (var mod in AppInit.modules)
+                {
+                    try
+                    {
+                        if (mod.initspace != null && mod.assembly.GetType(mod.NamespacePath(mod.initspace)) is Type t && t.GetMethod("loaded") is MethodInfo m)
+                        {
+                            if (mod.version >= 2)
+                            {
+                                m.Invoke(null, new object[] { new InitspaceModel()
+                            {
+                                path = $"module/{mod.dll}", soks = new soks(), memoryCache = memoryCache, configuration = Configuration, services = serviceCollection, app = app
+                            }});
+                            }
+                            else
+                                m.Invoke(null, new object[] { });
+                        }
+                    }
+                    catch (Exception ex) { Console.WriteLine($"Module {mod.NamespacePath(mod.initspace)}: {ex.Message}\n\n"); }
+                }
+            }
+            #endregion
+
             app.UseDeveloperExceptionPage();
             applicationLifetime.ApplicationStopping.Register(OnShutdown);
 
@@ -236,23 +283,6 @@ namespace Lampac
                 ForwardLimit = null,
                 ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
             };
-
-            if (AppInit.conf.real_ip_cf)
-            {
-                string ips = HttpClient.Get("https://www.cloudflare.com/ips-v4", timeoutSeconds: 10).Result;
-                if (ips != null)
-                {
-                    forwarded.ForwardedForHeaderName = "CF-Connecting-IP";
-                    foreach (string line in ips.Split('\n'))
-                    {
-                        if (string.IsNullOrEmpty(line) || !line.Contains("/"))
-                            continue;
-
-                        string[] ln = line.Split('/');
-                        forwarded.KnownNetworks.Add(new IPNetwork(IPAddress.Parse(ln[0]), int.Parse(ln[1])));
-                    }
-                }
-            }
 
             if (AppInit.conf.KnownProxies != null && AppInit.conf.KnownProxies.Count > 0)
             {
@@ -276,7 +306,6 @@ namespace Lampac
             app.UseProxyIMG();
             app.UseProxyAPI();
             app.UseModule();
-            app.UseCache();
 
             app.UseEndpoints(endpoints =>
             {
@@ -288,7 +317,8 @@ namespace Lampac
 
         private void OnShutdown()
         {
-            PuppeteerTo.FullDispose();
+            Chromium.FullDispose();
+            Firefox.FullDispose();
         }
     }
 }

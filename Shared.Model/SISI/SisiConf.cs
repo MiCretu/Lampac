@@ -10,7 +10,11 @@ namespace Lampac.Models.AppConf
 
         public string? rsize_host { get; set; }
 
+        public string? bypass_host { get; set; }
+
         public string[]? rsize_disable { get; set; }
+
+        public string[]? proxyimg_disable { get; set; }
 
         public int heightPicture { get; set; }
 
@@ -21,7 +25,10 @@ namespace Lampac.Models.AppConf
 
         public string? iconame { get; set; }
 
-        public bool push_all { get; set; } 
+
+        public bool push_all { get; set; }
+
+        public bool forced_checkRchtype { get; set; }
 
 
         public BookmarksConf bookmarks { get; set; } = new BookmarksConf();

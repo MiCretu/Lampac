@@ -13,6 +13,8 @@ using Shared.Model.Base;
 using System.Text.RegularExpressions;
 using Shared.Models.AppConf;
 using Shared.Models.ServerProxy;
+using Lampac.Engine.CORE;
+using Shared.Models.Browser;
 
 namespace Lampac
 {
@@ -36,8 +38,8 @@ namespace Lampac
                 {
                     var jss = new JsonSerializerSettings { Error = (se, ev) => 
                     { 
-                        ev.ErrorContext.Handled = true; 
-                        Console.WriteLine("init.conf - " + ev.ErrorContext.Error + "\n\n"); 
+                        ev.ErrorContext.Handled = true;
+                        Console.WriteLine($"DeserializeObject Exception init.conf:\n{ev.ErrorContext.Error}\n\n"); 
                     }};
 
                     string initfile = File.ReadAllText("init.conf").Trim();
@@ -48,14 +50,17 @@ namespace Lampac
 
                     try
                     {
+                        cacheconf.Item2 = lastWriteTime;
                         cacheconf.Item1 = JsonConvert.DeserializeObject<AppInit>(initfile, jss);
                     }
-                    catch { }
+                    catch
+                    {
+                        if (cacheconf != default)
+                            return cacheconf.Item1;
+                    }
 
                     if (cacheconf.Item1 == null)
                         cacheconf.Item1 = new AppInit();
-
-                    cacheconf.Item2 = lastWriteTime;
 
                     if (cacheconf.Item1 != null)
                     {
@@ -63,6 +68,7 @@ namespace Lampac
                             corseuhost = cacheconf.Item1.corsehost;
 
                         _vast = cacheconf.Item1.vast;
+                        _defaultOn = cacheconf.Item1.defaultOn;
                     }
 
                     #region accounts
@@ -87,6 +93,7 @@ namespace Lampac
                     }
                     #endregion
 
+                    #region users.txt
                     if (File.Exists("merchant/users.txt"))
                     {
                         long utc = DateTime.UtcNow.ToFileTimeUtc();
@@ -127,6 +134,7 @@ namespace Lampac
                             }
                         }
                     }
+                    #endregion
 
                     try
                     {
@@ -142,6 +150,8 @@ namespace Lampac
         public static string Host(HttpContext httpContext)
         {
             string scheme = string.IsNullOrEmpty(conf.listenscheme) ? httpContext.Request.Scheme : conf.listenscheme;
+            if (httpContext.Request.Headers.TryGetValue("xscheme", out var xscheme) && !string.IsNullOrEmpty(xscheme))
+                scheme = xscheme;
 
             if (!string.IsNullOrEmpty(conf.listenhost))
                 return $"{scheme}://{conf.listenhost}";
@@ -184,10 +194,7 @@ namespace Lampac
                         try
                         {
                             mod.assembly = Assembly.LoadFile(path);
-
-                            if (mod.initspace != null && mod.assembly.GetType(mod.initspace) is Type t && t.GetMethod("loaded") is MethodInfo m)
-                                m.Invoke(null, new object[] { });
-
+                            mod.index = mod.index != 0 ? mod.index : (100 + modules.Count);
                             modules.Add(mod);
                         }
                         catch { }
@@ -212,6 +219,8 @@ namespace Lampac
 
         public string listenhost = null;
 
+        public string frontend = null; // cloudflare|nginx
+
         public string localhost = "127.0.0.1";
 
         public bool multiaccess = false;
@@ -230,23 +239,52 @@ namespace Lampac
 
         public string anticaptchakey;
 
-        public KitConf kit = new KitConf();
+        public KitConf kit = new KitConf() { cacheToSeconds = 20 };
 
         public SyncConf sync = new SyncConf();
 
         public WebLogConf weblog = new WebLogConf();
 
+        public OpenStatConf openstat = new OpenStatConf();
+
         public RchConf rch = new RchConf() { enable = true, keepalive = 45, permanent_connection = true };
 
         public StorageConf storage = new StorageConf() { enable = true, max_size = 7_000000, brotli = false, md5name = true };
 
-        public PuppeteerConf puppeteer = new PuppeteerConf() { enable = true, keepopen = true };
+        public PuppeteerConf chromium = new PuppeteerConf() 
+        { 
+            enable = true, Xvfb = true,
+            Args = new string[] { "--disable-blink-features=AutomationControlled" },
+            context = new KeepopenContext() { keepopen = true }
+        };
+
+        public PuppeteerConf firefox = new PuppeteerConf()
+        {
+            enable = false, Headless = true,
+            context = new KeepopenContext() { keepopen = true, keepalive = 5, min = 1, max = 1 }
+        };
 
         public FfprobeSettings ffprobe = new FfprobeSettings() { enable = true };
 
+        public CubConf cub { get; set; } = new CubConf()
+        {
+            enable = false, 
+            domain = CrypTo.DecodeBase64("Y3ViLnJlZA=="), scheme = "https",
+            mirror = "mirror-kurwa.men",
+            cache_api = 20, cache_img = 60,
+        };
+
+        public TmdbConf tmdb { get; set; } = new TmdbConf()
+        {
+            enable = true,
+            DNS = "9.9.9.9", DNS_TTL = 20,
+            cache_api = 20, cache_img = -1, check_img = false,
+            api_key = "4ef0d7355d9ffb5151e987764708ce96"
+        };
+
         public ServerproxyConf serverproxy = new ServerproxyConf()
         {
-            enable = true, encrypt = true, verifyip = true, allow_tmdb = true,
+            enable = true, encrypt = true, verifyip = true,
             buffering = new ServerproxyBufferingConf()
             {
                 enable = true, rent = 8192, length = 3906, millisecondsTimeout = 5
@@ -255,34 +293,41 @@ namespace Lampac
             {
                 img = false, img_rsize = true
             },
-            tmdb = new ServerproxyTmdb() 
-            {
-                proxy = new ProxySettings()
-                {
-                    list = new ConcurrentBag<string>() { "socks5://127.0.0.1:9050" }
-                }
-            }
+            maxlength_m3u = 1900000,
+            maxlength_ts = 10000000
         };
 
-        public FileCacheConf fileCacheInactive = new FileCacheConf() { maxcachesize = 400, intervalclear = 4, img = 10, hls = 90, html = 5, torrent = 50 };
+        public FileCacheConf fileCacheInactive = new FileCacheConf() 
+        { 
+            maxcachesize = 10_000, // 10GB на папку
+            img = 10, hls = 90, html = 5, torrent = 50 // minute
+        };
 
         public DLNASettings dlna = new DLNASettings() 
         { 
-            enable = true, allowedEncryption = true, path = "dlna",
-            autoupdatetrackers = true, addTrackersToMagnet = true, intervalUpdateTrackers = 90
+            enable = true, path = "dlna",
+            uploadSpeed = 125000 * 10,
+            autoupdatetrackers = true, intervalUpdateTrackers = 90, addTrackersToMagnet = true, 
         };
 
-        public WebConf LampaWeb = new WebConf() { autoupdate = true, intervalupdate = 90, basetag = true, index = "lampa-main/index.html" };
+        public WebConf LampaWeb = new WebConf()
+        {
+            autoupdate = true,
+            intervalupdate = 90,
+            basetag = true, index = "lampa-main/index.html",
+            tree = "48fc4bd6a9379039fa7b9566181f96bd1d2b3b87"
+        };
 
-        public OnlineConf online = new OnlineConf() 
-        { 
+        public OnlineConf online = new OnlineConf()
+        {
             findkp = "all", checkOnlineSearch = true,
-            component = "lampac", name = "Lampac", description = "Плагин для просмотра онлайн сериалов и фильмов", version = true
+            component = "lampac", name = "Lampac", description = "Плагин для просмотра онлайн сериалов и фильмов", 
+            version = true, btn_priority_forced = true, showquality = true
         };
 
         public AccsConf accsdb = new AccsConf() 
         { 
-            authMesage = "Войдите в аккаунт cub.red",
+            authMesage = "Войдите в аккаунт - настройки, синхронизация",
             denyMesage = "Добавьте {account_email} в init.conf",
             denyGroupMesage = "У вас нет прав для просмотра этой страницы",
             expiresMesage = "Время доступа для {account_email} истекло в {expires}",

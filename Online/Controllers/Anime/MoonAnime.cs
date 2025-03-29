@@ -22,25 +22,18 @@ namespace Lampac.Controllers.LITE
             Directory.CreateDirectory("cache/logs/MoonAnime");
         }
 
-        ProxyManager proxyManager = new ProxyManager("moonanime", AppInit.conf.MoonAnime);
+        ProxyManager proxyManager = new ProxyManager(AppInit.conf.MoonAnime);
 
         [HttpGet]
         [Route("lite/moonanime")]
         async public Task<ActionResult> Index(string imdb_id, string title, string original_title, long animeid, string t, int s = -1, bool rjson = false)
         {
-            var init = AppInit.conf.MoonAnime;
+            var init = await loadKit(AppInit.conf.MoonAnime);
+            if (await IsBadInitialization(init, rch: false))
+                return badInitMsg;
 
-            if (!init.enable || string.IsNullOrEmpty(init.token))
+            if (string.IsNullOrEmpty(init.token))
                 return OnError();
-
-            if (init.rhub)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
 
             if (animeid == 0)
             {
@@ -102,14 +95,14 @@ namespace Lampac.Controllers.LITE
             {
                 #region Серии
                 string memKey = $"moonanime:playlist:{animeid}";
-                if (!memoryCache.TryGetValue(memKey, out JArray root))
+                if (!hybridCache.TryGetValue(memKey, out JArray root))
                 {
                     root = await HttpClient.Get<JArray>($"{init.corsHost()}/api/2.0/title/{animeid}/videos?api_key={init.token}", timeoutSeconds: 8, proxy: proxyManager.Get(), headers: httpHeaders(init));
                     if (root == null)
                         return OnError(proxyManager);
 
                     proxyManager.Success();
-                    memoryCache.Set(memKey, root, cacheTime(30, init: init));
+                    hybridCache.Set(memKey, root, cacheTime(30, init: init));
                 }
 
                 if (s == -1)
@@ -203,12 +196,12 @@ namespace Lampac.Controllers.LITE
         [Route("lite/moonanime/video.m3u8")]
         async public Task<ActionResult> Video(string vod, bool play, string title, string original_title)
         {
-            var init = AppInit.conf.MoonAnime;
-            if (!init.enable || string.IsNullOrEmpty(init.token))
-                return OnError();
+            var init = await loadKit(AppInit.conf.MoonAnime);
+            if (await IsBadInitialization(init))
+                return badInitMsg;
 
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
+            if (string.IsNullOrEmpty(init.token))
+                return OnError();
 
             string memKey = $"moonanime:vod:{vod}";
             if (!hybridCache.TryGetValue(memKey, out (string file, string subtitle) cache))
@@ -287,7 +280,7 @@ namespace Lampac.Controllers.LITE
                 ("sec-fetch-mode", "cors"),
                 ("sec-fetch-site", "cross-site"),
                 ("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0")
-            ), plugin: "moonanime");
+            ));
 
 
             if (play)

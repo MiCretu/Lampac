@@ -1,4 +1,5 @@
-﻿using Shared.Model.Online;
+﻿using Shared.Model.Base;
+using Shared.Model.Online;
 using Shared.Model.Online.Zetflix;
 using Shared.Model.Templates;
 using System.Text.Json;
@@ -82,10 +83,7 @@ namespace Shared.Engine.Online
         public async ValueTask<int> number_of_seasons(long id)
         {
             int number_of_seasons = 1;
-
-            string? themoviedb = await onget.Invoke($"https://api.themoviedb.org/3/tv/{id}?api_key=4ef0d7355d9ffb5151e987764708ce96", null);
-            if (themoviedb == null)
-                themoviedb = await onget.Invoke($"https://tmdb.cub.red/3/tv/{id}?api_key=4ef0d7355d9ffb5151e987764708ce96", null);
+            string? themoviedb = await onget.Invoke($"https://tmdb.mirror-kurwa.men/3/tv/{id}?api_key=4ef0d7355d9ffb5151e987764708ce96", null);
 
             if (themoviedb != null)
             {
@@ -107,7 +105,7 @@ namespace Shared.Engine.Online
         #endregion
 
         #region Html
-        public string Html(EmbedModel? root, int number_of_seasons, long kinopoisk_id, string? title, string? original_title, string? t, int s, bool isbwa = false, bool rjson = false)
+        public string Html(EmbedModel? root, int number_of_seasons, long kinopoisk_id, string? title, string? original_title, string? t, int s, bool isbwa = false, bool rjson = false, VastConf? vast = null)
         {
             if (root?.pl == null || root.pl.Count == 0)
                 return string.Empty;
@@ -147,7 +145,7 @@ namespace Shared.Engine.Online
                     if (streams.Count == 0)
                         continue;
 
-                    mtpl.Append(name, streams[0].link, streamquality: new StreamQualityTpl(streams));
+                    mtpl.Append(name, streams[0].link, streamquality: new StreamQualityTpl(streams), vast: vast);
                 }
 
                 return rjson ? mtpl.ToJson() : mtpl.ToHtml();
@@ -230,7 +228,7 @@ namespace Shared.Engine.Online
                             if (streams.Count == 0)
                                 continue;
 
-                            etpl.Append(name, title ?? original_title, s.ToString(), Regex.Match(name, "^([0-9]+)").Groups[1].Value, streams[0].link, streamquality: new StreamQualityTpl(streams));
+                            etpl.Append(name, title ?? original_title, s.ToString(), Regex.Match(name, "^([0-9]+)").Groups[1].Value, streams[0].link, streamquality: new StreamQualityTpl(streams), vast: vast);
                         }
                     }
 

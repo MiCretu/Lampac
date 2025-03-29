@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Shared.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
@@ -9,12 +10,16 @@ using System.Threading.Tasks;
 
 namespace Lampac.Engine
 {
-    public class soks : Hub
+    public class soks : Hub, ISoks
     {
         #region soks
         static ConcurrentDictionary<string, HubCallerContext> _connections = new ConcurrentDictionary<string, HubCallerContext>();
 
         public static IHubCallerClients hubClients = null;
+
+        public IHubCallerClients AllClients => hubClients;
+
+        public ConcurrentDictionary<string, HubCallerContext> Connections => _connections;
         #endregion
 
         #region Rch
@@ -31,7 +36,8 @@ namespace Lampac.Engine
             }
             catch { }
 
-            RchClient.Registry(Context.GetHttpContext().Connection.RemoteIpAddress.ToString(), Context.ConnectionId, job);
+            var requestInfo = Context.GetHttpContext().Features.Get<RequestModel>();
+            RchClient.Registry(requestInfo.IP, Context.ConnectionId, job);
         }
 
         /// <summary>
@@ -46,7 +52,10 @@ namespace Lampac.Engine
             {
                 case "rch":
                     if (AppInit.conf.rch.enable)
-                        RchClient.Registry(Context.GetHttpContext().Connection.RemoteIpAddress.ToString(), Context.ConnectionId);
+                    {
+                        var requestInfo = Context.GetHttpContext().Features.Get<RequestModel>();
+                        RchClient.Registry(requestInfo.IP, Context.ConnectionId);
+                    }
                     break;
             }
         }
@@ -66,6 +75,8 @@ namespace Lampac.Engine
                 }
             }
         }
+
+        public void WebLog(string message, string plugin) => SendLog(message, plugin);
 
         public static void SendLog(string message, string plugin)
         {
@@ -88,6 +99,12 @@ namespace Lampac.Engine
             event_clients.AddOrUpdate(Context.ConnectionId, uid, (k,v) => uid);
         }
 
+        /// <summary>
+        /// Отправка сообщений через js
+        /// </summary>
+        /// <param name="uid"></param>
+        /// <param name="name"></param>
+        /// <param name="data"></param>
         public async Task events(string uid, string name, string data)
         {
             if (hubClients == null || string.IsNullOrEmpty(uid) || string.IsNullOrEmpty(name) || (data != null && data.Length > 10_000000))
@@ -101,13 +118,36 @@ namespace Lampac.Engine
             }
             catch { }
         }
+
+        public Task EventsAsync(string connectionId, string uid, string name, string data) => SendEvents(connectionId, uid, name, data);
+
+        /// <summary>
+        /// Отправка сообщений через сервер
+        /// </summary>
+        /// <param name="connectionId"></param>
+        /// <param name="uid"></param>
+        /// <param name="name"></param>
+        /// <param name="data"></param>
+        async public static Task SendEvents(string connectionId, string uid, string name, string data)
+        {
+            if (hubClients == null || string.IsNullOrEmpty(uid) || string.IsNullOrEmpty(name) || (data != null && data.Length > 10_000000))
+                return;
+
+            try
+            {
+                var clients = event_clients.Where(i => i.Value == uid && i.Key != connectionId);
+                if (clients.Any())
+                    await hubClients.Clients(clients.Select(i => i.Key)).SendAsync("event", uid, name, data ?? string.Empty).ConfigureAwait(false);
+            }
+            catch { }
+        }
         #endregion
 
         #region Connected / Disconnected
         public override Task OnConnectedAsync()
         {
             hubClients = Clients;
-            //_connections.TryAdd(Context.ConnectionId, Context);
+            _connections.TryAdd(Context.ConnectionId, Context);
 
             return base.OnConnectedAsync();
         }
@@ -119,7 +159,7 @@ namespace Lampac.Engine
             RchClient.OnDisconnected(Context.ConnectionId);
 
             hubClients = Clients;
-            //_connections.TryRemove(Context.ConnectionId, out _);
+            _connections.TryRemove(Context.ConnectionId, out _);
 
             return base.OnDisconnectedAsync(exception);
         }

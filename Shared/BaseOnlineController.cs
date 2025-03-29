@@ -1,6 +1,7 @@
 ﻿using Lampac;
 using Lampac.Engine;
 using Lampac.Engine.CORE;
+using Lampac.Models.Module;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
@@ -8,13 +9,94 @@ using Shared.Engine;
 using Shared.Engine.CORE;
 using Shared.Model.Base;
 using Shared.Models;
+using Shared.Models.Module;
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Threading.Tasks;
+using System.Web;
 
 namespace Online
 {
     public class BaseOnlineController : BaseController
     {
+        #region IsBadInitialization
+        async public ValueTask<bool> IsBadInitialization(BaseSettings init, bool? rch = null)
+        {
+            if (AppInit.modules != null)
+            {
+                var args = new InitializationModel(init, rch);
+
+                foreach (RootModule mod in AppInit.modules.Where(i => i.initialization != null))
+                {
+                    try
+                    {
+                        if (mod.assembly.GetType(mod.NamespacePath(mod.initialization)) is Type t)
+                        {
+                            if (t.GetMethod("Invoke") is MethodInfo m2)
+                            {
+                                badInitMsg = (ActionResult)m2.Invoke(null, new object[] { HttpContext, memoryCache, requestInfo, host, args });
+                                if (badInitMsg != null)
+                                    return true;
+                            }
+
+                            if (t.GetMethod("InvokeAsync") is MethodInfo m)
+                            {
+                                badInitMsg = await (Task<ActionResult>)m.Invoke(null, new object[] { HttpContext, memoryCache, requestInfo, host, args });
+                                if (badInitMsg != null)
+                                    return true;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            if (!init.enable || init.rip)
+            {
+                badInitMsg = OnError("disable");
+                return true;
+            }
+
+            if (NoAccessGroup(init, out string error_msg))
+            {
+                badInitMsg = new JsonResult(new { accsdb = true, msg = error_msg });
+                return true;
+            }
+
+            var overridehost = await IsOverridehost(init);
+            if (overridehost != null)
+            {
+                badInitMsg = overridehost;
+                return true;
+            }
+
+            if (rch != null)
+            {
+                if ((bool)rch)
+                {
+                    if (init.rhub && !AppInit.conf.rch.enable)
+                    {
+                        badInitMsg = ShowError(RchClient.ErrorMsg);
+                        return true;
+                    }
+                }
+                else
+                {
+                    if (init.rhub)
+                    {
+                        badInitMsg = ShowError(RchClient.ErrorMsg);
+                        return true;
+                    }
+                }
+            }
+
+            return IsCacheError(init);
+        }
+        #endregion
+
+
         #region MaybeInHls
         public bool MaybeInHls(bool hls, BaseSettings init)
         {
@@ -60,10 +142,9 @@ namespace Online
 
                 string log = $"{HttpContext.Request.Path.Value}\n{msg}";
                 if (!string.IsNullOrEmpty(weblog))
-                    log += $"\n\n===================\n\n\n{weblog}";
+                    log += $"\n\n\n===================\n\n{weblog}";
 
                 HttpClient.onlog?.Invoke(null, log);
-                HttpContext.Response.Headers.TryAdd("emsg", msg);
             }
 
             if (AppInit.conf.multiaccess && gbcache)

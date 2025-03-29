@@ -33,6 +33,8 @@ namespace Lampac.Models.AppConf
 
         public string expiresMesage { get; set; }
 
+        public Dictionary<string, object> @params { get; set; }
+
         public Dictionary<string, DateTime> accounts { get; set; } = new Dictionary<string, DateTime>();
 
         public ConcurrentBag<AccsUser> users { get; set; } = new ConcurrentBag<AccsUser>();
@@ -61,7 +63,7 @@ namespace Lampac.Models.AppConf
                 return null;
 
             uid = uid.ToLower().Trim();
-            return users.FirstOrDefault(i => i.id == uid || (i.ids != null && i.ids.Contains(uid)));
+            return users.FirstOrDefault(i => (i.id != null && i.id.ToLower() == uid) || (i.ids != null && i.ids.FirstOrDefault(id => id.ToLower() == uid) != null));
         }
     }
 }

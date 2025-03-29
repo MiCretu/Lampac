@@ -18,9 +18,10 @@ namespace JinEnergy.Online
             string? kpid = parse_arg("id", args);
             if (kpid != null && kpid.StartsWith("KP_"))
             {
-                kpid = kpid.Replace("KP_", "");
-                string? json = await JsHttpClient.Get($"{AppInit.VCDN.corsHost()}/api/short?api_token={AppInit.VCDN.token}&kinopoisk_id=" + kpid, timeoutSeconds: 5);
-                return JsonSerializer.Serialize(new { imdb_id = Regex.Match(json ?? "", "\"imdb_id\":\"(tt[^\"]+)\"").Groups[1].Value, kinopoisk_id = kpid });
+                return string.Empty;
+                //kpid = kpid.Replace("KP_", "");
+                //string? json = await JsHttpClient.Get($"{AppInit.VCDN.corsHost()}/api/short?api_token={AppInit.VCDN.token}&kinopoisk_id=" + kpid, timeoutSeconds: 5);
+                //return JsonSerializer.Serialize(new { imdb_id = Regex.Match(json ?? "", "\"imdb_id\":\"(tt[^\"]+)\"").Groups[1].Value, kinopoisk_id = kpid });
             }
 
             var arg = defaultArgs(args);
@@ -46,13 +47,13 @@ namespace JinEnergy.Online
 
             async Task<string?> getVSDN(string imdb)
             {
-                string? json = await JsHttpClient.Get($"{AppInit.VCDN.corsHost()}/api/short?api_token={AppInit.VCDN.token}&imdb_id={imdb}", timeoutSeconds: 4);
-                if (json == null)
-                    return null;
+                //string? json = await JsHttpClient.Get($"{AppInit.VCDN.corsHost()}/api/short?api_token={AppInit.VCDN.token}&imdb_id={imdb}", timeoutSeconds: 4);
+                //if (json == null)
+                //    return null;
 
-                string kpid = Regex.Match(json, "\"kp_id\":\"?([0-9]+)\"?").Groups[1].Value;
-                if (!string.IsNullOrEmpty(kpid) && kpid != "0" && kpid != "null")
-                    return kpid;
+                //string kpid = Regex.Match(json, "\"kp_id\":\"?([0-9]+)\"?").Groups[1].Value;
+                //if (!string.IsNullOrEmpty(kpid) && kpid != "0" && kpid != "null")
+                //    return kpid;
 
                 return null;
             }
@@ -113,7 +114,7 @@ namespace JinEnergy.Online
         [JSInvokable("lite/events")]
         public static string Events(string args)
         {
-            var online = new List<(string name, string url, string plugin, int index)>(20);
+            var online = new List<(dynamic? init, string name, string url, string plugin, int index)>(20);
 
             var arg = defaultArgs(args);
             int serial = int.Parse(parse_arg("serial", args) ?? "-1");
@@ -135,7 +136,7 @@ namespace JinEnergy.Online
                             url += (url.Contains("?") ? "&" : "?") + "clarification=1";
                     }
 
-                    online.Add(($"{init.displayname ?? name}{arg_title}", url, plugin, init.displayindex > 0 ? init.displayindex : online.Count));
+                    online.Add((null, $"{init.displayname ?? name}{arg_title}", url, plugin, init.displayindex > 0 ? init.displayindex : online.Count));
                 }
             }
 
@@ -169,7 +170,7 @@ namespace JinEnergy.Online
                 send("Mirage - 1080p", "durexlab", new BaseSettings() { enable = true });
             }
 
-            send("VideoCDN - 1080p", "vcdn", AppInit.VCDN);
+            //send("VideoCDN - 1080p", "vcdn", AppInit.VCDN);
             send("HDVB - 1080p", "hdvb", AppInit.HDVB);
 
             if (!titleSearch)

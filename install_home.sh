@@ -7,7 +7,11 @@ apt-get update
 apt-get install -y unzip curl coreutils
 
 # Install .NET
-curl -L -k -o dotnet-install.sh https://dot.net/v1/dotnet-install.sh
+if ! curl -L -k -o dotnet-install.sh https://dot.net/v1/dotnet-install.sh; then
+   echo "Failed to download dotnet-install.sh. Exiting."
+   exit 1
+fi
+
 chmod 755 dotnet-install.sh
 ./dotnet-install.sh --channel 6.0 --runtime aspnetcore --install-dir /usr/share/dotnet
 ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
@@ -15,7 +19,11 @@ ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
 # Download zip
 mkdir $DEST -p 
 cd $DEST
-curl -L -k -o publish.zip https://github.com/immisterio/Lampac/releases/latest/download/publish.zip
+if ! curl -L -k -o publish.zip https://github.com/immisterio/Lampac/releases/latest/download/publish.zip; then
+   echo "Failed to download publish.zip. Exiting."
+   exit 1
+fi
+
 unzip -o publish.zip
 rm -f publish.zip
 
@@ -32,7 +40,10 @@ cat <<EOF > $DEST/init.conf
   "listenport": $random_port,
   "typecache": "mem",
   "mikrotik": true,
-  "puppeteer": {
+  "chromium": {
+    "enable": false
+  },
+  "firefox": {
     "enable": false
   },
   "dlna": {
@@ -118,7 +129,6 @@ ExecStart=/usr/bin/dotnet Lampac.dll
 #ExecReload=/bin/kill -s HUP $MAINPID
 #ExecStop=/bin/kill -s QUIT $MAINPID
 Restart=always
-LimitNOFILE=32000
 [Install]
 WantedBy=multi-user.target
 EOF

@@ -30,12 +30,9 @@ namespace Lampac.Engine.CORE
 
         public static string Encrypt(string uri, ProxyLinkModel p) => Encrypt(uri, p.reqip, p.headers, p.proxy, p.plugin);
 
-        public static string Encrypt(string uri, string reqip, List<HeadersModel> headers = null, WebProxy proxy = null, string plugin = null)
+        public static string Encrypt(string uri, string reqip, List<HeadersModel> headers = null, WebProxy proxy = null, string plugin = null, bool verifyip = true, DateTime ex = default)
         {
-            if (!AppInit.conf.serverproxy.encrypt)
-                return uri;
-
-            string hash = CrypTo.md5(uri + (AppInit.conf.serverproxy.verifyip ? reqip : string.Empty));
+            string hash = CrypTo.md5(uri + (verifyip && AppInit.conf.serverproxy.verifyip ? reqip : string.Empty));
             if (string.IsNullOrWhiteSpace(hash))
                 return string.Empty;
 
@@ -57,8 +54,12 @@ namespace Lampac.Engine.CORE
                 hash += ".mkv";
             else if (uri.Contains(".aac"))
                 hash += ".aac";
-            else if (uri.Contains(".jpg") || uri.Contains(".jpeg") || uri.Contains(".png") || uri.Contains(".webp"))
+            else if (uri.Contains(".jpg") || uri.Contains(".jpeg"))
                 hash += ".jpg";
+            else if (uri.Contains(".png"))
+                hash += ".png";
+            else if (uri.Contains(".webp"))
+                hash += ".webp";
             else if (uri.Contains(".vtt"))
                 hash += ".vtt";
             else if (uri.Contains(".srt"))
@@ -66,7 +67,7 @@ namespace Lampac.Engine.CORE
 
             if (!links.ContainsKey(hash))
             {
-                var md = new ProxyLinkModel(reqip, headers, proxy, uri, plugin);
+                var md = new ProxyLinkModel(reqip, headers, proxy, uri, plugin, ex: ex);
                 links.AddOrUpdate(hash, md, (d, u) => md);
             }
 
@@ -75,9 +76,6 @@ namespace Lampac.Engine.CORE
 
         public static ProxyLinkModel Decrypt(string hash, string reqip)
         {
-            if (!AppInit.conf.serverproxy.encrypt)
-                return null;
-
             if (links.TryGetValue(hash, out ProxyLinkModel val))
             {
                 if (!AppInit.conf.serverproxy.verifyip || reqip == null || reqip == val.reqip)
@@ -98,15 +96,23 @@ namespace Lampac.Engine.CORE
                 {
                     foreach (var link in links)
                     {
-                        if (DateTime.Now > link.Value.upd.AddHours(link.Value.uri.EndsWith(".jpg") ? 8 : 36))
-                            links.TryRemove(link.Key, out _);
+                        if (link.Value.ex != default)
+                        {
+                            if (DateTime.Now > link.Value.ex)
+                                links.TryRemove(link.Key, out _);
+                        }
+                        else
+                        {
+                            if (DateTime.Now > link.Value.upd.AddHours(20))
+                                links.TryRemove(link.Key, out _);
+                        }
                     }
 
                     BrotliTo.Compress(conditionPath, JsonConvert.SerializeObject(links));
                 }
                 catch { }
 
-                await Task.Delay(TimeSpan.FromMinutes(5));
+                await Task.Delay(TimeSpan.FromMinutes(2));
             }
         }
     }

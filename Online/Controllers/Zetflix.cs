@@ -4,94 +4,125 @@ using Lampac.Engine.CORE;
 using Online;
 using Shared.Engine.Online;
 using System.Collections.Generic;
-using PuppeteerSharp;
-using Shared.Engine;
 using System;
 using System.Linq;
 using Shared.Model.Online;
+using Shared.Engine.CORE;
+using Microsoft.Playwright;
+using System.Text.RegularExpressions;
+using Shared.PlaywrightCore;
+using Shared.Engine;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Lampac.Controllers.LITE
 {
     public class Zetflix : BaseOnlineController
     {
+        static string PHPSESSID = null;
+
         [HttpGet]
         [Route("lite/zetflix")]
         async public Task<ActionResult> Index(long id, int serial, long kinopoisk_id, string title, string original_title, string t, int s = -1, bool orightml = false, bool origsource = false, bool rjson = false)
         {
-            var init = AppInit.conf.Zetflix.Clone();
+            var init = await loadKit(AppInit.conf.Zetflix);
+            if (await IsBadInitialization(init, rch: false))
+                return badInitMsg;
 
-            if (!init.enable || kinopoisk_id == 0)
+            if (kinopoisk_id == 0)
                 return OnError();
 
-            if (init.rhub)
-                return ShowError(RchClient.ErrorMsg);
+            if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
+                return OnError();
 
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
+            var proxyManager = new ProxyManager(init);
+            var proxy = proxyManager.BaseGet();
 
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
+            string ztfhost = await goHost(init.host);
             string log = $"{HttpContext.Request.Path.Value}\n\nstart init\n";
 
             var oninvk = new ZetflixInvoke
             (
                host,
-               init.corsHost(),
+               ztfhost,
                MaybeInHls(init.hls, init),
-               (url, head) => HttpClient.Get(init.cors(url), headers: httpHeaders(init, head), timeoutSeconds: 8),
-               onstreamtofile => HostStreamProxy(init, onstreamtofile, plugin: "zetflix")
+               (url, head) => HttpClient.Get(init.cors(url), headers: httpHeaders(init, head), timeoutSeconds: 8, proxy: proxy.proxy),
+               onstreamtofile => HostStreamProxy(init, onstreamtofile, proxy: proxy.proxy)
                //AppInit.log
             );
 
             int rs = serial == 1 ? (s == -1 ? 1 : s) : s;
 
-            string html = await InvokeCache($"zetfix:view:{kinopoisk_id}:{rs}", cacheTime(20, init: init), async () => 
+            string html = await InvokeCache($"zetfix:view:{kinopoisk_id}:{rs}:{proxyManager.CurrentProxyIp}", cacheTime(20, init: init), async () => 
             {
-                string uri = $"{AppInit.conf.Zetflix.host}/iplayer/videodb.php?kp={kinopoisk_id}" + (rs > 0 ? $"&season={rs}" : "");
+                string uri = $"{ztfhost}/iplayer/videodb.php?kp={kinopoisk_id}" + (rs > 0 ? $"&season={rs}" : "");
 
-                if (init.black_magic)
-                    return await black_magic(uri);
-
-                string html = string.IsNullOrEmpty(PHPSESSID) ? null : await HttpClient.Get(uri, cookie: $"PHPSESSID={PHPSESSID}", headers: HeadersModel.Init("Referer", "https://www.google.com/"));
+                string html = string.IsNullOrEmpty(PHPSESSID) ? null : await HttpClient.Get(uri, proxy: proxy.proxy, cookie: $"PHPSESSID={PHPSESSID}", headers: HeadersModel.Init("Referer", "https://www.google.com/"));
                 if (html != null && !html.StartsWith("<script>(function"))
                 {
                     if (!html.Contains("new Playerjs"))
                         return null;
 
+                    proxyManager.Success();
                     return html;
                 }
 
                 try
                 {
-                    using (var browser = await PuppeteerTo.Browser())
+                    using (var browser = new PlaywrightBrowser(init.priorityBrowser, PlaywrightStatus.headless))
                     {
-                        if (browser == null)
-                            return null;
-
                         log += "browser init\n";
 
-                        var page = await browser.Page(cookies, new Dictionary<string, string>()
+                        var page = await browser.NewPageAsync(init.plugin, new Dictionary<string, string>()
                         {
                             ["Referer"] = "https://www.google.com/"
-                        });
+
+                        }, proxy: proxy.data);
 
                         if (page == null)
                             return null;
 
                         log += "page init\n";
 
-                        await page.GoToAsync(uri, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
+                        await page.RouteAsync("**/*", async route =>
+                        {
+                            try
+                            {
+                                if (await PlaywrightBase.AbortOrCache(memoryCache, page, route, abortMedia: true, fullCacheJS: true))
+                                    return;
 
-                        var response = await page.GoToAsync($"view-source:{uri}");
+                                await route.ContinueAsync();
+                            }
+                            catch { }
+                        });
+
+                        var responce = await page.GotoAsync(uri);
+                        if (responce == null)
+                        {
+                            proxyManager.Refresh();
+                            return null;
+                        }
+
+                        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+                        var response = browser.firefox != null ? await page.GotoAsync(uri) : await page.ReloadAsync();
+                        if (response == null)
+                        {
+                            proxyManager.Refresh();
+                            return null;
+                        }
+
+
                         html = await response.TextAsync();
 
                         log += $"{html}\n\n";
 
-                        if (html.StartsWith("<script>(function"))
+                        if (html == null || html.StartsWith("<script>(function"))
+                        {
+                            proxyManager.Refresh();
                             return null;
+                        }
 
-                        var cook = await page.GetCookiesAsync();
+                        var cook = await page.Context.CookiesAsync();
                         PHPSESSID = cook?.FirstOrDefault(i => i.Name == "PHPSESSID")?.Value;
 
                         if (!html.Contains("new Playerjs"))
@@ -126,64 +157,32 @@ namespace Lampac.Controllers.LITE
 
             OnLog(log + "\nStart OnResult");
 
-            return ContentTo(oninvk.Html(content, number_of_seasons, kinopoisk_id, title, original_title, t, s, rjson: rjson));
+            return ContentTo(oninvk.Html(content, number_of_seasons, kinopoisk_id, title, original_title, t, s, vast: init.vast, rjson: rjson));
         }
 
 
-        static string PHPSESSID = null;
-
-        static CookieParam[] cookies = null;
-
-        static DateTime excookies = default;
-
-        async ValueTask<string> black_magic(string uri)
+        async Task<string> goHost(string host)
         {
-            if (cookies != null && DateTime.Now > excookies)
-                cookies = null;
+            if (!Regex.IsMatch(host, "^https?://go."))
+                return host;
 
-            try
+            string memkey = $"zeflix:gohost:{host}";
+            if (hybridCache.TryGetValue(memkey, out string ztfhost))
+                return ztfhost;
+
+            string html = await HttpClient.Get(host);
+            if (html != null)
             {
-                using (var browser = await PuppeteerTo.Browser())
+                ztfhost = Regex.Match(html, "\"([^\"]+)\"\\);</script>").Groups[1].Value;
+                if (!string.IsNullOrEmpty(ztfhost))
                 {
-                    if (browser == null)
-                        return null;
-
-                    var page = await browser.Page(cookies, new Dictionary<string, string>()
-                    {
-                        ["Referer"] = "https://www.google.com/"
-                    });
-
-                    if (page == null)
-                        return null;
-
-                    var response = await page.GoToAsync($"view-source:{uri}");
-                    string html = await response.TextAsync();
-
-                    if (html.StartsWith("<script>(function(){"))
-                    {
-                        cookies = null;
-                        await page.DeleteCookieAsync();
-                        await page.GoToAsync(uri, new NavigationOptions { WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
-
-                        response = await page.GoToAsync($"view-source:{uri}");
-                        html = await response.TextAsync();
-                    }
-
-                    if (html.StartsWith("<script>(function"))
-                        return null;
-
-                    if (cookies == null)
-                        excookies = DateTime.Now.AddMinutes(10);
-
-                    cookies = await page.GetCookiesAsync();
-
-                    if (!html.Contains("new Playerjs"))
-                        return null;
-
-                    return html;
+                    ztfhost = $"https://{ztfhost}";
+                    hybridCache.Set(memkey, ztfhost, DateTime.Now.AddHours(1));
+                    return ztfhost;
                 }
             }
-            catch { return null; }
+
+            return CrypTo.DecodeBase64("aHR0cHM6Ly96ZXQtZmxpeC5vbmxpbmU=");
         }
     }
 }

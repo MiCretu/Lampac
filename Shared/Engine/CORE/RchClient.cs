@@ -57,7 +57,7 @@ namespace Lampac.Engine.CORE
             httpContext = context;
             enableRhub = init.rhub;
             rhub_fallback = init.rhub_fallback;
-            ip = context.Connection.RemoteIpAddress.ToString();
+            ip = requestInfo.IP;
             connectionId = clients.FirstOrDefault(i => i.Value.ip == ip).Key;
 
             if (enableRhub && rhub_fallback && init.rhub_geo_disable != null)
@@ -207,7 +207,7 @@ namespace Lampac.Engine.CORE
 
                 hub.Invoke(null, (connectionId, rchId, url, data, send_headers, returnHeaders));
 
-                string result = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(rhub_fallback ? 5 : 8));
+                string result = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(rhub_fallback ? 8 : 12));
                 rchIds.TryRemove(rchId, out _);
 
                 if (string.IsNullOrWhiteSpace(result))
@@ -274,14 +274,14 @@ namespace Lampac.Engine.CORE
         #endregion
 
         #region InfoConnected
-        public (int version, string host, string rchtype) InfoConnected()
+        public (int version, string host, string href, string rchtype) InfoConnected()
         {
             var client = clients.FirstOrDefault(i => i.Value.ip == ip);
             if (client.Value.json == null)
                 return default;
 
             JObject json = client.Value.json;
-            return (json.Value<int>("version"), json.Value<string>("host"), json.Value<string>("rchtype"));
+            return (json.Value<int>("version"), json.Value<string>("host"), json.Value<string>("href"), json.Value<string>("rchtype"));
         }
         #endregion
     }

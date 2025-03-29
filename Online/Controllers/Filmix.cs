@@ -41,22 +41,24 @@ namespace Lampac.Controllers.LITE
         [Route("lite/filmix")]
         async public Task<ActionResult> Index(string title, string original_title, int clarification, int year, int postid, int t, int? s = null, bool origsource = false, bool rjson = false)
         {
-            var init = AppInit.conf.Filmix.Clone();
+            var init = await loadKit(AppInit.conf.Filmix, (j, i, c) =>
+            {
+                i.pro = c.pro;
+                i.tokens = c.tokens;
+                i.user_apitv = c.user_apitv;
+                i.token_apitv = c.token_apitv;
+                i.livehash = c.livehash;
+                return i;
+            });
 
-            if (!init.enable)
-                return OnError();
-
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
 
             reset: var rch = new RchClient(HttpContext, host, init, requestInfo);
-            var proxyManager = new ProxyManager("filmix", init);
+            if (rch.IsNotSupport("cors,web", out string rch_error))
+                return ShowError(rch_error);
+
+            var proxyManager = new ProxyManager(init);
             var proxy = proxyManager.Get();
 
             string token = init.token;
@@ -66,7 +68,7 @@ namespace Lampac.Controllers.LITE
             #region filmix.tv
             if (!rch.enable && !string.IsNullOrEmpty(init.user_apitv) && string.IsNullOrEmpty(init.token_apitv))
             {
-                string accessToken = await InvokeCache("filmix:accessToken", TimeSpan.FromHours(8), async () => 
+                string accessToken = await InvokeCache($"filmix:accessToken:{init.user_apitv}:{init.token_apitv}", TimeSpan.FromHours(8), async () => 
                 {
                     var content = new System.Net.Http.StringContent($"{{\"user_name\":\"{init.user_apitv}\",\"user_passw\":\"{init.passwd_apitv}\"}}", Encoding.UTF8, "application/json"); ;
                     var jobject = await HttpClient.Post<JObject>("https://api.filmix.tv/api-fx/auth", content, timeoutSeconds: 8);
@@ -118,7 +120,7 @@ namespace Lampac.Controllers.LITE
                 postid = search.Value.id;
             }
 
-            var cache = await InvokeCache<RootObject>($"filmix:post:{postid}", cacheTime(20, init: init), rch.enable ? null : proxyManager, inmemory: true, onget: async res =>
+            var cache = await InvokeCache<RootObject>($"filmix:post:{postid}:{token}", cacheTime(20, init: init), rch.enable ? null : proxyManager, onget: async res =>
             {
                 if (rch.IsNotConnected())
                     return res.Fail(rch.connectionMsg);
@@ -135,8 +137,8 @@ namespace Lampac.Controllers.LITE
 
         async ValueTask<string> getLiveHash(FilmixSettings init)
         {
-            string memKey = $"filmix:ChangeLink:hashfimix";
-            if (!memoryCache.TryGetValue(memKey, out string hash))
+            string memKey = $"filmix:ChangeLink:hashfimix:{init.token_apitv}";
+            if (!hybridCache.TryGetValue(memKey, out string hash))
             {
                 if (!string.IsNullOrEmpty(init.token_apitv))
                 {
@@ -154,7 +156,7 @@ namespace Lampac.Controllers.LITE
                 }
 
                 if (init.livehash && !string.IsNullOrWhiteSpace(hash))
-                    memoryCache.Set(memKey, hash, DateTime.Now.AddHours(2));
+                    hybridCache.Set(memKey, hash, DateTime.Now.AddHours(2));
             }
 
             return hash;

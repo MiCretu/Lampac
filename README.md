@@ -1,27 +1,22 @@
 # Telegram группа
 https://t.me/+TIXtgvGBBOc3ZTUy
 
-# Запуск в Docker
-```
-docker run -d -p 9118:9118 --restart always --name lampac immisterio/lampac
-```
-__tags__: latest (linux/amd64) / arm32 (linux/arm/v7) / arm64 (linux/arm64/v8)
-
 # Установка на linux
 спасибо @nikk, @Denis
 ```
 curl -L -k -s https://lampac.sh | bash
 ```
+* 500Mb RAM, 1.5GB HDD, многопользовательская
 * Порт генерируется рандомно и выводится в конце установки скрипта
 * Изменить или посмотреть порт можно в init.conf - 
 ```grep "listenport" /home/lampac/init.conf```
 
-# Домашняя - linux
+# Домашняя (облегченная) - linux
 ```
 curl -L -k -s https://lampac.sh/home | bash
 ```
-* 200Mb RAM, 200Mb HDD, 50 пользователей
-* DLNA по умолчанию отключен, включается в init.conf
+* 200Mb RAM, 200Mb HDD, до 10 пользователей
+* DLNA/Chromium/Firefox по умолчанию отключен, включается в init.conf
 * TorrServer по умолчанию отключен, включается в module/manifest.json
 
 # Установка на Windows
@@ -29,9 +24,20 @@ curl -L -k -s https://lampac.sh/home | bash
 2. Распаковать https://github.com/immisterio/Lampac/releases/latest/download/publish.zip
 3. Запустить Lampac.exe
 
+# Запуск в Docker
+```
+docker run -d -p 9118:9118 --restart always --name lampac immisterio/lampac
+```
+__tags__: latest (linux/amd64) / arm32 (linux/arm/v7) / arm64 (linux/arm64/v8)
+
 # Запуск в Android
 1. Termux - https://github.com/immisterio/Lampac/blob/main/Termux/README.md
 2. BWA - https://bwa.to
+
+# Тестируемые устройства
+* Debian 11/12 x64
+* Windows 10 x64
+* Raspberry arm64 (Debian 11)
 
 # Плагины для Lampa
 1. Все плагины сразу - "http://IP:9118/on.js"
@@ -54,9 +60,11 @@ curl -L -k -s https://lampac.sh/home | bash
 3. Основные настройки в init.conf (пример example.conf)
 
 # Источники 
-* Filmix, KinoPub, Alloha, Rezka, Zetflix, Collaps, Lumex, VDBmovies, VideoDB, Vibix, HDVB, Kodik, Ashdi (Украинский), KinoUKR (Украинский), FanCDN, Kinotochka, CDNmovies, Anilibria, AnimeGo, AniMedia, AnimeLib, MoonAnime (Украинский), Animevost, Animebesst, Redheadsound, VoKino
+* Filmix, KinoPub, Alloha, Rezka, Kinobase, Zetflix, Collaps, Lumex, VDBmovies, VideoDB, Vibix, Videoseed, HDVB, Kodik, Ashdi (Украинский), KinoUKR (Украинский), FanCDN, Kinotochka, CDNmovies, Anilibria, AnimeGo, AniMedia, AnimeLib, MoonAnime (Украинский), Animevost, Animebesst, Redheadsound, VoKino, HydraFlix (ENG), VidSrc (ENG), MovPI (ENG), Videasy (ENG), 2Embed (ENG), VidLink (ENG), AutoEmbed (ENG), SmashyStream (ENG), PlayEmbed (ENG), RgShows (ENG)
 * Kinozal, Nnmclub, Rutor, Megapeer, Torrentby, Bitru, Anilibria, Toloka (Украинский), Rutracker, Selezen, LostFilm, Animelayer, Anifilm
 * PornHub, PornHubPremium, Bongacams, Chaturbate, Ebalovo, Eporner, HQporner, Porntrex, Spankbang, Xhamster, Xnxx, Xvideos
+
+Для работы Lumex и ENG балансеров, нужно включить Firefox в init.conf
 
 # Привязка PRO аккаунтов
 * Filmix - "http://IP:9118/lite/filmixpro" 
@@ -106,11 +114,11 @@ curl -L -k -s https://lampac.sh/home | bash
 1. Для Samsung "IP:9118/samsung.wgt"
 
 # Работа с базами данных
-* Microsoft.EntityFrameworkCore - MS SQL Server, SQLite
-* Npgsql - PostgreSQL
-* Pomelo.EntityFrameworkCore.MySql - MariaDB, MySQL
-* MongoDB.Driver - MongoDB
-* StackExchange.Redis - Redis
+* Microsoft.EntityFrameworkCore 6.0.36 - MS SQL Server, SQLite
+* Npgsql 9.0.2 - PostgreSQL
+* Pomelo.EntityFrameworkCore.MySql 6.0.3 - MariaDB, MySQL
+* MongoDB.Driver 3.2.0 - MongoDB
+* StackExchange.Redis 2.8.24 - Redis
 
 # Параметры init.conf
 * checkOnlineSearch - Делать предварительный поиск скрывая балансеры без ответа

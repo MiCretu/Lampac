@@ -67,7 +67,7 @@ namespace JinEnergy
         {
             try
             {
-                string? geo = await JsHttpClient.Get("https://geo.cub.red");
+                string? geo = await JsHttpClient.Get("https://rc.bwa.to/geo?select=country");
                 if (geo != null)
                     Country = geo;
 
@@ -96,17 +96,17 @@ namespace JinEnergy
                             if (conf.Kodik.token != null)
                                 conf.Kodik.token = conf.Kodik.token.Contains(":") ? conf.Kodik.Decrypt(conf.Kodik.token)! : conf.Kodik.token;
 
-                            if (conf.VCDN.token != null)
-                                conf.VCDN.token = conf.VCDN.token.Contains(":") ? conf.VCDN.Decrypt(conf.VCDN.token)! : conf.VCDN.token;
+                            if (conf.VideoCDN.token != null)
+                                conf.VideoCDN.token = conf.VideoCDN.token.Contains(":") ? conf.VideoCDN.Decrypt(conf.VideoCDN.token)! : conf.VideoCDN.token;
 
                             if (IsDefaultConf && geo == "RU")
                             {
                                 conf.BongaCams.enable = false;
-                                conf.Xvideos.overridehost = "https://durex.monster/xds";
-                                conf.Xnxx.overridehost = "https://durex.monster/xnx";
-                                conf.Ebalovo.overridehost = "https://durex.monster/elo";
-                                conf.HQporner.overridehost = "https://durex.monster/hqr";
-                                conf.Spankbang.overridehost = "https://durex.monster/sbg";
+                                conf.Xvideos.overridehost = "https://rc.bwa.to/xds";
+                                conf.Xnxx.overridehost = "https://rc.bwa.to/xnx";
+                                conf.Ebalovo.overridehost = "https://rc.bwa.to/elo";
+                                conf.HQporner.overridehost = "https://rc.bwa.to/hqr";
+                                conf.Spankbang.overridehost = "https://rc.bwa.to/sbg";
                                 conf.Xhamster.corseu = true;
                                 conf.Porntrex.corseu = true;
                                 conf.Eporner.corseu = true;
@@ -207,7 +207,7 @@ namespace JinEnergy
         public static OnlinesSettings VDBmovies => conf.VDBmovies;
 
 
-        public static OnlinesSettings VCDN => conf.VCDN;
+        //public static OnlinesSettings VCDN => conf.VideoCDN;
 
         public static VokinoSettings VoKino => conf.VoKino;
 

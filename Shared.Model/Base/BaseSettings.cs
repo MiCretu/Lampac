@@ -1,16 +1,39 @@
-﻿using Shared.Model.Online;
-
-namespace Shared.Model.Base
+﻿namespace Shared.Model.Base
 {
-    public class BaseSettings : Iproxy, Istreamproxy, Icors, Igroup
+    public class BaseSettings : Iproxy, Istreamproxy, Icors, Igroup , ICloneable
     {
-        public bool enable { get; set; }
+        bool _enable;
+
+        public bool enable 
+        {
+            get 
+            {
+                if (AppInit._defaultOn == "enabled")
+                    return enabled;
+
+                return _enable;
+            }
+            set
+            {
+                _enable = value;
+            }
+        }
+
+        public bool enabled { get; set; }
+
+
+
+        public bool kit { get; set; } = true;
+
+        public string plugin { get; set; }
 
         public int group { get; set; }
 
         public bool group_hide { get; set; } = true;
 
         public bool rhub { get; set; }
+
+        public bool rhub_streamproxy { get; set; }
 
         public bool rhub_fallback { get; set; }
 
@@ -30,15 +53,27 @@ namespace Shared.Model.Base
 
         public string[]? overridehosts { get; set; }
 
+        public string? overridepasswd { get; set; }
+
         public string? host { get; set; }
 
         public string? apihost { get; set; }
 
         public string? scheme { get; set; }
 
-        public List<HeadersModel>? headers { get; set; }
+        public bool hls { get; set; }
+
+        public string? cookie { get; set; }
+
+        public string? token { get; set; }
+
+        public Dictionary<string, string>? headers { get; set; }
+
+        public Dictionary<string, string>? headers_stream { get; set; }
 
         public VastConf? vast { get; set; }
+
+        public string? priorityBrowser { get; set; }
 
 
         #region proxy
@@ -54,7 +89,7 @@ namespace Shared.Model.Base
 
         public bool apnstream { get; set; }
 
-        public List<string>? geostreamproxy { get; set; }
+        public string[]? geostreamproxy { get; set; }
 
         public ApnConf? apn { get; set; }
 
@@ -104,6 +139,11 @@ namespace Shared.Model.Base
                 return new string(buffer);
             }
             catch { return null; }
+        }
+
+        object ICloneable.Clone()
+        {
+            return MemberwiseClone();
         }
     }
 }

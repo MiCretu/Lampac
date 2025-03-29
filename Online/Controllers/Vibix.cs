@@ -8,79 +8,95 @@ using Online;
 using Shared.Model.Templates;
 using Shared.Model.Online;
 using Newtonsoft.Json;
+using System.Web;
+using Lampac.Models.LITE;
+using Shared.Model.Online.Vibix;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Lampac.Controllers.LITE
 {
     public class Vibix : BaseOnlineController
     {
-        ProxyManager proxyManager = new ProxyManager("vibix", AppInit.conf.Vibix);
+        ProxyManager proxyManager = new ProxyManager(AppInit.conf.Vibix);
 
         [HttpGet]
         [Route("lite/vibix")]
-        async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, int t = -1, int s = -1, bool rjson = false, bool origsource = false)
+        async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title,  int s = -1, bool rjson = false, bool origsource = false)
         {
-            var init = AppInit.conf.Vibix.Clone();
-            if (!init.enable || string.IsNullOrEmpty(init.token))
+            var init = await loadKit(AppInit.conf.Vibix);
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
+
+            if (string.IsNullOrEmpty(init.token))
                 return OnError();
 
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            JObject data = await search(imdb_id, kinopoisk_id);
+            JObject data = await search(init, imdb_id, kinopoisk_id);
             if (data == null)
                 return OnError();
 
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
             reset: var proxy = proxyManager.Get();
             var rch = new RchClient(HttpContext, host, init, requestInfo);
+            if (rch.IsNotSupport("web", out string rch_error))
+                return ShowError(rch_error);
+
+            string iframe_url = data.Value<string>("iframe_url");
+            var cache = await InvokeCache<EmbedModel>(rch.ipkey($"vibix:iframe:{iframe_url}:{init.token}", proxyManager), cacheTime(20, rhub: 2, init: init), rch.enable ? null : proxyManager, async res =>
+            {
+                if (rch.IsNotConnected())
+                    return res.Fail(rch.connectionMsg);
+
+                string html = rch.enable ? await rch.Get(init.cors(iframe_url), httpHeaders(init)) :
+                                           await HttpClient.Get(init.cors(iframe_url), timeoutSeconds: 8, proxy: proxy, headers: httpHeaders(init));
+
+                string file = null;
+
+                if (data.Value<string>("type") == "movie")
+                {
+                    file = html.Split(",file:")[1].Split("function")[0];
+                    if (string.IsNullOrEmpty(file) || !file.Contains("/get_file/"))
+                        res.Fail("file");
+
+                    return new EmbedModel() { content = file };
+                }
+                else
+                {
+                    file = Regex.Match(html, "file:([^\n\r]+\\]\\}\\]\\}\\])\\}\\)").Groups[1].Value.Trim();
+                    if (string.IsNullOrEmpty(file))
+                        file = Regex.Match(html, "file:([^\n\r]+\\]\\}\\]\\}\\]),").Groups[1].Value.Trim();
+
+                    if (string.IsNullOrEmpty(file) || !file.Contains("/get_file/"))
+                        res.Fail("file");
+
+                    try
+                    {
+                        return new EmbedModel() { serial = JsonConvert.DeserializeObject<List<Seasons>>(file) };
+                    }
+                    catch { return res.Fail("DeserializeObject"); }
+                }
+            });
+
+            if (IsRhubFallback(cache, init))
+                goto reset;
 
             if (data.Value<string>("type") == "movie")
             {
                 #region Фильм
-                string iframe_url = data.Value<string>("iframe_url");
-                var cache = await InvokeCache<JArray>(rch.ipkey($"vibix:video:{iframe_url}", proxyManager), cacheTime(20, rhub: 2, init: init), rch.enable ? null : proxyManager, async res =>
-                {
-                    if (rch.IsNotConnected())
-                        return res.Fail(rch.connectionMsg);
-
-                    string html = rch.enable ? await rch.Get(init.cors(iframe_url), httpHeaders(init)) :
-                                               await HttpClient.Get(init.cors(iframe_url), timeoutSeconds: 8, proxy: proxy, headers: httpHeaders(init));
-                    if (html == null)
-                        return OnError(rch.enable ? null : proxyManager);
-
-                    string file = Regex.Match(html, "file:([^\n\r]+)\\}\\)\\;").Groups[1].Value;
-                    if (string.IsNullOrEmpty(file) || !file.Contains("/get_file/"))
-                        return OnError();
-
-                    return JsonConvert.DeserializeObject<JArray>(file);
-                });
-
-                if (IsRhubFallback(cache, init))
-                    goto reset;
-
                 return OnResult(cache, () => 
                 {
                     var mtpl = new MovieTpl(title, original_title);
 
-                    foreach (var item in cache.Value)
+                    var streams = new StreamQualityTpl();
+
+                    var match = new Regex("([0-9]+p)\\](https?://[^,\t ]+\\.mp4)").Match(cache.Value.content);
+                    while (match.Success)
                     {
-                        var streams = new StreamQualityTpl();
-
-                        var match = new Regex("([0-9]+p)\\](https?://[^,\t ]+\\.mp4)").Match(item.Value<string>("file"));
-                        while (match.Success)
-                        {
-                            streams.Insert(HostStreamProxy(init, match.Groups[2].Value, proxy: proxy, plugin: "vibix"), match.Groups[1].Value);
-                            match = match.NextMatch();
-                        }
-
-                        if (streams.Any())
-                            mtpl.Append(item.Value<string>("title"), streams.Firts().link, streamquality: streams);
+                        streams.Insert(HostStreamProxy(init, match.Groups[2].Value, proxy: proxy), match.Groups[1].Value);
+                        match = match.NextMatch();
                     }
+
+                    if (streams.Any())
+                        mtpl.Append("По умолчанию", streams.Firts().link, streamquality: streams, vast: init.vast);
 
                     return rjson ? mtpl.ToJson(reverse: true) : mtpl.ToHtml(reverse: true);
 
@@ -89,20 +105,75 @@ namespace Lampac.Controllers.LITE
             }
             else
             {
-                return OnError();
+                #region Сериал
+                return OnResult(cache, () =>
+                {
+                    string enc_title = HttpUtility.UrlEncode(title);
+                    string enc_original_title = HttpUtility.UrlEncode(original_title);
+                    
+                    if (s == -1)
+                    {
+                        var tpl = new SeasonTpl(cache.Value.serial.Count);
+
+                        foreach (var season in cache.Value.serial)
+                        {
+                            string name = season.title;
+                            if (int.TryParse(Regex.Match(name, "([0-9]+)$").Groups[1].Value, out int _s) && _s > 0)
+                            {
+                                string link = $"{host}/lite/vibix?rjson={rjson}&kinopoisk_id={kinopoisk_id}&imdb_id={imdb_id}&title={enc_title}&original_title={enc_original_title}&s={_s}";
+                                tpl.Append($"{_s} сезон", link, _s);
+                            }
+                        }
+
+                        return rjson ? tpl.ToJson() : tpl.ToHtml();
+                    }
+                    else
+                    {
+                        var etpl = new EpisodeTpl();
+
+                        foreach (var season in cache.Value.serial)
+                        {
+                            if (!season.title.EndsWith($" {s}"))
+                                continue;
+
+                            foreach (var episode in season.folder)
+                            {
+                                string name = episode.title;
+                                string file = episode.folder.First().file;
+
+                                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(file))
+                                    continue;
+
+                                var streams = new StreamQualityTpl();
+
+                                var match = new Regex("([0-9]+p)\\](https?://[^,\t\\[ ]+\\.mp4)").Match(file);
+                                while (match.Success)
+                                {
+                                    streams.Append(HostStreamProxy(init, match.Groups[2].Value, proxy: proxy), match.Groups[1].Value);
+                                    match = match.NextMatch();
+                                }
+
+                                if (streams.Any())
+                                    etpl.Append(name, title ?? original_title, s.ToString(), Regex.Match(name, "([0-9]+)").Groups[1].Value, streams.Firts().link, streamquality: streams, vast: init.vast);
+                            }
+                        }
+
+                        return rjson ? etpl.ToJson() : etpl.ToHtml();
+                    }
+
+                }, origsource: origsource, gbcache: !rch.enable);
+                #endregion
             }
         }
 
 
         #region search
-        async ValueTask<JObject> search(string imdb_id, long kinopoisk_id)
+        async ValueTask<JObject> search(OnlinesSettings init, string imdb_id, long kinopoisk_id)
         {
             string memKey = $"vibix:view:{kinopoisk_id}:{imdb_id}";
 
             if (!hybridCache.TryGetValue(memKey, out JObject root))
             {
-                var init = AppInit.conf.Vibix;
-
                 async ValueTask<JObject> goSearch(string imdb_id, long kinopoisk_id)
                 {
                     if (string.IsNullOrEmpty(imdb_id) && kinopoisk_id == 0)

@@ -2,10 +2,12 @@
 
 namespace Lampac.Models.LITE
 {
-    public class LumexSettings : BaseSettings
+    public class LumexSettings : BaseSettings, ICloneable
     {
-        public LumexSettings(string apihost, string token, string iframehost, string clientId)
+        public LumexSettings(string plugin, string apihost, string token, string iframehost, string clientId)
         {
+            this.plugin = plugin;
+
             if (apihost != null)
                 this.apihost = apihost.StartsWith("http") ? apihost : Decrypt(apihost);
 
@@ -19,12 +21,32 @@ namespace Lampac.Models.LITE
         }
 
 
-        public string? token { get; set; }
-
         public string? clientId { get; set; }
 
         public string? iframehost { get; set; }
 
-        public bool hls { get; set; }
+
+        public string? username { get; set; }
+
+        public string? password { get; set; }
+
+        public string? domain { get; set; }
+
+        public bool disable_protection { get; set; }
+
+        public bool disable_ads { get; set; }
+
+        public bool log { get; set; }
+
+
+        public LumexSettings Clone()
+        {
+            return (LumexSettings)MemberwiseClone();
+        }
+
+        object ICloneable.Clone()
+        {
+            return MemberwiseClone();
+        }
     }
 }

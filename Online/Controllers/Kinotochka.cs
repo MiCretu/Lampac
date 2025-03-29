@@ -20,26 +20,19 @@ namespace Lampac.Controllers.LITE
         [Route("lite/kinotochka")]
         async public Task<ActionResult> Index(long kinopoisk_id, string title, int serial, string newsuri, int s = -1, bool rjson = false)
         {
-            var init = AppInit.conf.Kinotochka.Clone();
+            var init = await loadKit(AppInit.conf.Kinotochka);
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
 
-            if (!init.enable || string.IsNullOrWhiteSpace(title))
+            if (string.IsNullOrWhiteSpace(title))
                 return OnError();
 
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
             reset: var rch = new RchClient(HttpContext, host, init, requestInfo);
-            var proxyManager = new ProxyManager("kinotochka", init);
-            var proxy = proxyManager.Get();
-
             if (rch.IsNotSupport("web", out string rch_error))
                 return ShowError(rch_error);
+
+            var proxyManager = new ProxyManager(init);
+            var proxy = proxyManager.Get();
 
             // enable 720p
             string cookie = init.cookie;
@@ -166,7 +159,7 @@ namespace Lampac.Controllers.LITE
                         var etpl = new EpisodeTpl();
 
                         foreach (var l in cache.Value)
-                            etpl.Append(l.name, title, s.ToString(), Regex.Match(l.name, "^([0-9]+)").Groups[1].Value, HostStreamProxy(init, l.uri, proxy: proxy));
+                            etpl.Append(l.name, title, s.ToString(), Regex.Match(l.name, "^([0-9]+)").Groups[1].Value, HostStreamProxy(init, l.uri, proxy: proxy), vast: init.vast);
 
                         return rjson ? etpl.ToJson() : etpl.ToHtml();
 
@@ -217,7 +210,7 @@ namespace Lampac.Controllers.LITE
                 return OnResult(cache, () => 
                 {
                     var mtpl = new MovieTpl(title);
-                    mtpl.Append("По умолчанию", HostStreamProxy(init, cache.Value.content, proxy: proxy));
+                    mtpl.Append("По умолчанию", HostStreamProxy(init, cache.Value.content, proxy: proxy), vast: init.vast);
 
                     return rjson ? mtpl.ToJson() : mtpl.ToHtml();
 

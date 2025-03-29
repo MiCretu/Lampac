@@ -14,29 +14,19 @@ namespace Lampac.Controllers.LITE
         [Route("lite/redheadsound")]
         async public Task<ActionResult> Index(string title, string original_title, int year, int clarification, bool origsource = false, bool rjson = false)
         {
-            var init = AppInit.conf.Redheadsound.Clone();
-
-            if (!init.enable)
-                return OnError();
-
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
+            var init = await loadKit(AppInit.conf.Redheadsound);
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
 
             if (string.IsNullOrWhiteSpace(title) || year == 0)
                 return OnError();
 
             reset: var rch = new RchClient(HttpContext, host, init, requestInfo);
-            var proxyManager = new ProxyManager("redheadsound", init);
-            var proxy = proxyManager.Get();
-
-            if (rch.IsNotSupport("web", out string rch_error))
+            if (rch.IsNotSupport("web,cors", out string rch_error))
                 return ShowError(rch_error);
+
+            var proxyManager = new ProxyManager(init);
+            var proxy = proxyManager.Get();
 
             var oninvk = new RedheadsoundInvoke
             (
@@ -44,7 +34,7 @@ namespace Lampac.Controllers.LITE
                init.corsHost(),
                ongettourl => rch.enable ? rch.Get(init.cors(ongettourl), httpHeaders(init)) : HttpClient.Get(init.cors(ongettourl), timeoutSeconds: 8, proxy: proxy, headers: httpHeaders(init)),
                (url, data) => rch.enable ? rch.Post(init.cors(url), data, httpHeaders(init)) : HttpClient.Post(init.cors(url), data, timeoutSeconds: 8, proxy: proxy, headers: httpHeaders(init)),
-               streamfile => HostStreamProxy(init, streamfile, proxy: proxy, plugin: "redheadsound"),
+               streamfile => HostStreamProxy(init, streamfile, proxy: proxy),
                requesterror: () => { if (!rch.enable) { proxyManager.Refresh(); } }
             );
 
@@ -59,7 +49,7 @@ namespace Lampac.Controllers.LITE
             if (IsRhubFallback(cache, init))
                 goto reset;
 
-            return OnResult(cache, () => oninvk.Html(cache.Value, title, rjson: rjson), origsource: origsource, gbcache: !rch.enable);
+            return OnResult(cache, () => oninvk.Html(cache.Value, title, vast: init.vast, rjson: rjson), origsource: origsource, gbcache: !rch.enable);
         }
     }
 }

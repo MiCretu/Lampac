@@ -14,24 +14,15 @@ namespace Lampac.Controllers.LITE
 {
     public class AnimeLib : BaseOnlineController
     {
-        ProxyManager proxyManager = new ProxyManager("animelib", AppInit.conf.AnimeLib);
+        ProxyManager proxyManager = new ProxyManager(AppInit.conf.AnimeLib);
 
         [HttpGet]
         [Route("lite/animelib")]
         async public Task<ActionResult> Index(string title, string original_title, int year, string uri, string t, bool rjson = false)
         {
-            var init = AppInit.conf.AnimeLib.Clone();
-            if (!init.enable)
-                return OnError();
-
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
+            var init = await loadKit(AppInit.conf.AnimeLib);
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
 
             var rch = new RchClient(HttpContext, host, init, requestInfo, keepalive: -1);
 
@@ -113,7 +104,7 @@ namespace Lampac.Controllers.LITE
             {
                 #region Серии
                 string memKey = $"animelib:playlist:{uri}";
-                if (!memoryCache.TryGetValue(memKey, out JArray episodes))
+                if (!hybridCache.TryGetValue(memKey, out JArray episodes))
                 {
                     if (rch.IsNotConnected())
                         return ContentTo(rch.connectionMsg);
@@ -134,12 +125,12 @@ namespace Lampac.Controllers.LITE
                     if (!rch.enable)
                         proxyManager.Success();
 
-                    memoryCache.Set(memKey, episodes, cacheTime(30, init: init));
+                    hybridCache.Set(memKey, episodes, cacheTime(30, init: init));
                 }
 
                 #region Перевод
                 memKey = $"animelib:video:{episodes.First.Value<int>("id")}";
-                if (!memoryCache.TryGetValue(memKey, out JArray players))
+                if (!hybridCache.TryGetValue(memKey, out JArray players))
                 {
                     if (rch.IsNotConnected())
                         return ContentTo(rch.connectionMsg);
@@ -153,7 +144,7 @@ namespace Lampac.Controllers.LITE
                         return OnError(proxyManager, refresh_proxy: !rch.enable);
 
                     players = root["data"]["players"].ToObject<JArray>();
-                    memoryCache.Set(memKey, players, cacheTime(30, init: init));
+                    hybridCache.Set(memKey, players, cacheTime(30, init: init));
                 }
 
                 var vtpl = new VoiceTpl();
@@ -203,18 +194,15 @@ namespace Lampac.Controllers.LITE
         [Route("lite/animelib/video")]
         async public Task<ActionResult> Video(string title, long id, string voice, bool play)
         {
-            var init = AppInit.conf.AnimeLib.Clone();
-            if (!init.enable)
-                return OnError();
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
+            var init = await loadKit(AppInit.conf.AnimeLib);
+            if (await IsBadInitialization(init))
+                return badInitMsg;
 
             var headers = httpHeaders(init);
             var rch = new RchClient(HttpContext, host, init, requestInfo, keepalive: -1);
 
             string memKey = $"animelib:video:{id}";
-            if (!memoryCache.TryGetValue(memKey, out JArray players))
+            if (!hybridCache.TryGetValue(memKey, out JArray players))
             {
                 if (rch.IsNotConnected())
                     return ContentTo(rch.connectionMsg);
@@ -232,7 +220,7 @@ namespace Lampac.Controllers.LITE
                 if (!rch.enable)
                     proxyManager.Success();
 
-                memoryCache.Set(memKey, players, cacheTime(30, init: init));
+                hybridCache.Set(memKey, players, cacheTime(30, init: init));
             }
 
             List<(string link, string quality)> goStreams(string _voice)
@@ -253,7 +241,7 @@ namespace Lampac.Controllers.LITE
                         if (string.IsNullOrEmpty(href))
                             continue;
 
-                        string file = HostStreamProxy(init, "https://video1.anilib.me/.%D0%B0s/" + href, proxy: proxyManager.Get(), plugin: "animelib", headers: headers);
+                        string file = HostStreamProxy(init, "https://video1.anilib.me/.%D0%B0s/" + href, proxy: proxyManager.Get(), headers: headers);
 
                         _streams.Add((file, $"{item.Value<int>("quality")}p"));
                     }

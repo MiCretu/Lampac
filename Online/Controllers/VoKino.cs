@@ -15,7 +15,7 @@ namespace Lampac.Controllers.LITE
 {
     public class VoKino : BaseOnlineController
     {
-        ProxyManager proxyManager = new ProxyManager("vokino", AppInit.conf.VoKino);
+        ProxyManager proxyManager = new ProxyManager(AppInit.conf.VoKino);
 
         #region vokinotk
         [HttpGet]
@@ -49,24 +49,26 @@ namespace Lampac.Controllers.LITE
 
         [HttpGet]
         [Route("lite/vokino")]
-        async public Task<ActionResult> Index(long kinopoisk_id, string title, string original_title, string balancer, string t, int s = -1, bool rjson = false)
+        async public Task<ActionResult> Index(bool checksearch, long kinopoisk_id, string title, string original_title, string balancer, string t, int s = -1, bool rjson = false)
         {
-            var init = AppInit.conf.VoKino.Clone();
+            var init = await loadKit(AppInit.conf.VoKino, (j, i, c) => 
+            {
+                if (j.ContainsKey("online"))
+                    i.online = c.online;
+                return i; 
+            });
 
-            if (!init.enable || kinopoisk_id == 0 || string.IsNullOrEmpty(init.token))
+            if (await IsBadInitialization(init, rch: true))
+                return badInitMsg;
+
+            if (kinopoisk_id == 0 || string.IsNullOrEmpty(init.token))
                 return OnError();
 
-            if (init.rhub && !AppInit.conf.rch.enable)
-                return ShowError(RchClient.ErrorMsg);
-
-            if (NoAccessGroup(init, out string error_msg))
-                return ShowError(error_msg);
-
-            if (IsOverridehost(init, out string overridehost))
-                return Redirect(overridehost);
-
-            if (balancer is "filmix" or "ashdi" or "alloha")
+            if (balancer is "filmix" or "ashdi" or "vibix")
                 init.streamproxy = false;
+
+            if (checksearch && balancer != "vokino")
+                return Content("data-json="); // заглушка от 429
 
             reset: var rch = new RchClient(HttpContext, host, init, requestInfo);
             var proxy = proxyManager.Get();
@@ -81,7 +83,7 @@ namespace Lampac.Controllers.LITE
                requesterror: () => { if (!rch.enable) { proxyManager.Refresh(); } }
             );
 
-            var cache = await InvokeCache<EmbedModel>(rch.ipkey($"vokino:{kinopoisk_id}:{balancer}:{t}", proxyManager), cacheTime(20, rhub: 2, init: init), rch.enable ? null : proxyManager, async res =>
+            var cache = await InvokeCache<EmbedModel>(rch.ipkey($"vokino:{kinopoisk_id}:{balancer}:{t}:{init.token}", proxyManager), cacheTime(20, rhub: 2, init: init), rch.enable ? null : proxyManager, async res =>
             {
                 if (rch.IsNotConnected())
                     return res.Fail(rch.connectionMsg);
@@ -92,7 +94,7 @@ namespace Lampac.Controllers.LITE
             if (IsRhubFallback(cache, init))
                 goto reset;
 
-            return OnResult(cache, () => oninvk.Html(cache.Value, kinopoisk_id, title, original_title, balancer, t, s, rjson), gbcache: !rch.enable);
+            return OnResult(cache, () => oninvk.Html(cache.Value, kinopoisk_id, title, original_title, balancer, t, s, init.vast, rjson), gbcache: !rch.enable);
         }
     }
 }

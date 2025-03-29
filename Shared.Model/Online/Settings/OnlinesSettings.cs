@@ -2,11 +2,12 @@
 
 namespace Lampac.Models.LITE
 {
-    public class OnlinesSettings : BaseSettings
+    public class OnlinesSettings : BaseSettings, ICloneable
     {
-        public OnlinesSettings(string host, string? apihost = null, bool useproxy = false, string? token = null, bool enable = true, bool streamproxy = false, bool rip = false)
+        public OnlinesSettings(string plugin, string host, string? apihost = null, bool useproxy = false, string? token = null, bool enable = true, bool streamproxy = false, bool rip = false)
         {
             this.enable = enable;
+            this.plugin = plugin;
             this.useproxy = useproxy;
             this.streamproxy = streamproxy;
             this.rip = rip;
@@ -22,17 +23,14 @@ namespace Lampac.Models.LITE
         }
 
 
-        public string? token { get; set; }
-
-        public string? cookie { get; set; }
-
-        public bool hls { get; set; }
-
-        public bool dash { get; set; }
-
         public OnlinesSettings Clone()
         {
             return (OnlinesSettings)MemberwiseClone();
+        }
+
+        object ICloneable.Clone()
+        {
+            return MemberwiseClone();
         }
     }
 }

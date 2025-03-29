@@ -12,6 +12,7 @@ using Shared.Model.Online;
 using System.Collections.Generic;
 using System.Net;
 using Shared.Models;
+using System.Linq;
 
 namespace Lampac.Engine.Middlewares
 {
@@ -44,24 +45,18 @@ namespace Lampac.Engine.Middlewares
                 bool cacheimg = init.cache.img;
 
                 #region Проверки
-                ProxyLinkModel decryptLink = null;
                 string href = Regex.Replace(httpContext.Request.Path.Value, "/proxyimg([^/]+)?/", "").Replace("://", ":/_/").Replace("//", "/").Replace(":/_/", "://") + httpContext.Request.QueryString.Value;
+                ProxyLinkModel decryptLink = ProxyLink.Decrypt(Regex.Replace(href, "(\\?|&).*", ""), requestInfo.IP);
+
+                if (href.Contains("image.tmdb.org"))
+                {
+                    httpContext.Response.Redirect($"/tmdb/img/{Regex.Replace(href, "^https?://[^/]+/", "")}");
+                    return;
+                }
 
                 if (init.encrypt)
                 {
-                    if (href.Contains(".tmdb.org"))
-                    {
-                        if (!init.allow_tmdb)
-                        {
-                            httpContext.Response.StatusCode = 403;
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        decryptLink = ProxyLink.Decrypt(Regex.Replace(href, "(\\?|&).*", ""), requestInfo.IP);
-                        href = decryptLink?.uri;
-                    }
+                    href = decryptLink?.uri;
                 }
                 else
                 {
@@ -70,9 +65,12 @@ namespace Lampac.Engine.Middlewares
                         httpContext.Response.StatusCode = 403;
                         return;
                     }
+
+                    if (decryptLink?.uri != null)
+                        href = decryptLink.uri;
                 }
 
-                if (string.IsNullOrWhiteSpace(href))
+                if (string.IsNullOrWhiteSpace(href) || !href.StartsWith("http"))
                 {
                     httpContext.Response.StatusCode = 404;
                     return;
@@ -97,13 +95,17 @@ namespace Lampac.Engine.Middlewares
                 string md5key = CrypTo.md5($"{href}:{width}:{height}");
                 string outFile = $"cache/img/{md5key.Substring(0, 2)}/{md5key.Substring(2)}";
 
+                string contentType = href.Contains(".png") ? "image/png" : href.Contains(".webp") ? "image/webp" : "image/jpeg";
+                if (width > 0 || height > 0)
+                    contentType = href.Contains(".png") ? "image/png" : "image/jpeg";
+
                 if (cacheimg && File.Exists(outFile))
                 {
-                    httpContext.Response.ContentType = "image/jpeg";
+                    httpContext.Response.ContentType = contentType;
                     httpContext.Response.Headers.Add("X-Cache-Status", "HIT");
 
                     using (var fs = new FileStream(outFile, FileMode.Open, FileAccess.Read))
-                        await fs.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted);
+                        await fs.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted).ConfigureAwait(false);
 
                     return;
                 }
@@ -115,62 +117,93 @@ namespace Lampac.Engine.Middlewares
                     return;
                 }
 
-                var headers = decryptLink?.headers ?? new List<HeadersModel>();
                 var proxyManager = new ProxyManager("proxyimg", AppInit.conf.serverproxy);
                 var proxy = proxyManager.Get();
 
-                if (href.Contains("image.tmdb.org"))
+                if (width == 0 && height == 0 && !cacheimg)
                 {
-                    if (AppInit.conf.serverproxy.tmdb.useproxy)
-                        proxyManager = new ProxyManager("proxyimg_tmdb", AppInit.conf.serverproxy.tmdb);
+                    #region bypass
+                    var handler = CORE.HttpClient.Handler(href, proxy);
+                    handler.AllowAutoRedirect = true;
 
-                    if (!string.IsNullOrEmpty(AppInit.conf.serverproxy.tmdb.IMG_IP))
+                    using (var client = handler.UseProxy ? new System.Net.Http.HttpClient(handler) : _httpClientFactory.CreateClient("base"))
                     {
-                        headers.Add(new HeadersModel("Host", "image.tmdb.org"));
-                        href = href.Replace("image.tmdb.org", AppInit.conf.serverproxy.tmdb.IMG_IP);
-                    }
-                }
+                        CORE.HttpClient.DefaultRequestHeaders(client, 8, 0, null, null, decryptLink?.headers);
 
-                var array = await Download(href, proxy: proxy, headers: headers);
-                if (array == null)
-                {
-                    if (cacheimg)
-                        memoryCache.Set(memKeyErrorDownload, 0, DateTime.Now.AddMinutes(1));
+                        if (!handler.UseProxy)
+                            client.DefaultRequestHeaders.ConnectionClose = false;
 
-                    proxyManager.Refresh();
-                    httpContext.Response.Redirect(href);
-                    return;
-                }
-
-                if (array.Length > 1000)
-                {
-                    if (width > 0 || height > 0)
-                    {
-                        using (var image = Image.NewFromBuffer(array))
+                        using (HttpResponseMessage response = await client.GetAsync(href).ConfigureAwait(false))
                         {
-                            if (image.Width > width || image.Height > height)
+                            httpContext.Response.StatusCode = (int)response.StatusCode;
+                            httpContext.Response.Headers.Add("X-Cache-Status", "bypass");
+
+                            if (response.Headers.TryGetValues("Content-Type", out var contype))
+                                httpContext.Response.ContentType = contype?.FirstOrDefault() ?? contentType;
+
+                            await response.Content.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted).ConfigureAwait(false);
+                            return;
+                        }
+                    }
+                    #endregion
+                }
+                else
+                {
+                    #region rsize / cache
+                    var array = await Download(href, proxy: proxy, headers: decryptLink?.headers);
+                    if (array == null)
+                    {
+                        if (cacheimg)
+                            memoryCache.Set(memKeyErrorDownload, 0, DateTime.Now.AddSeconds(20));
+
+                        proxyManager.Refresh();
+                        httpContext.Response.Redirect(href);
+                        return;
+                    }
+
+                    if (array.Length > 1000)
+                    {
+                        if (width > 0 || height > 0)
+                        {
+                            using (var image = Image.NewFromBuffer(array))
                             {
-                                using (var res = image.ThumbnailImage(width == 0 ? image.Width : width, height == 0 ? image.Height : height, crop: Enums.Interesting.None))
-                                    array = res.JpegsaveBuffer();
+                                if (image.Width > width || image.Height > height)
+                                {
+                                    try
+                                    {
+                                        using (var res = image.ThumbnailImage(width == 0 ? image.Width : width, height == 0 ? image.Height : height, crop: Enums.Interesting.None))
+                                        {
+                                            var buffer = href.Contains(".png") ? res.PngsaveBuffer() : res.JpegsaveBuffer();
+                                            if (buffer != null && buffer.Length > 1000)
+                                                array = buffer;
+                                        }
+                                    }
+                                    catch { }
+                                }
                             }
                         }
                     }
 
-                    if (array != null && cacheimg && !File.Exists(outFile))
+                    httpContext.Response.ContentType = contentType;
+                    httpContext.Response.Headers.Add("X-Cache-Status", "MISS");
+                    await httpContext.Response.Body.WriteAsync(array, httpContext.RequestAborted).ConfigureAwait(false);
+
+                    if (array.Length > 1000 && cacheimg)
                     {
                         try
                         {
-                            Directory.CreateDirectory($"cache/img/{md5key.Substring(0, 2)}");
-                            File.WriteAllBytes(outFile, array);
+                            if (!File.Exists(outFile))
+                            {
+                                Directory.CreateDirectory($"cache/img/{md5key.Substring(0, 2)}");
+
+                                using (var fileStream = new FileStream(outFile, FileMode.Create, FileAccess.Write, FileShare.None))
+                                    await fileStream.WriteAsync(array, 0, array.Length).ConfigureAwait(false);
+                            }
                         }
                         catch { try { File.Delete(outFile); } catch { } }
                     }
-
-                    httpContext.Response.ContentType = "image/jpeg";
-                    httpContext.Response.Headers.Add("X-Cache-Status", cacheimg ? "MISS" : "bypass");
+                    #endregion
                 }
-
-                await httpContext.Response.Body.WriteAsync(array, httpContext.RequestAborted).ConfigureAwait(false);
             }
             else
             {
@@ -189,16 +222,18 @@ namespace Lampac.Engine.Middlewares
                 using (var client = handler.UseProxy ? new System.Net.Http.HttpClient(handler) : _httpClientFactory.CreateClient("base"))
                 {
                     CORE.HttpClient.DefaultRequestHeaders(client, 8, 0, null, null, headers);
-                    client.DefaultRequestHeaders.ConnectionClose = false;
 
-                    using (HttpResponseMessage response = await client.GetAsync(url))
+                    if (!handler.UseProxy)
+                        client.DefaultRequestHeaders.ConnectionClose = false;
+
+                    using (HttpResponseMessage response = await client.GetAsync(url).ConfigureAwait(false))
                     {
                         if (response.StatusCode != HttpStatusCode.OK)
                             return null;
 
                         using (HttpContent content = response.Content)
                         {
-                            byte[] res = await content.ReadAsByteArrayAsync();
+                            byte[] res = await content.ReadAsByteArrayAsync().ConfigureAwait(false);
                             if (res == null || res.Length == 0)
                                 return null;
 

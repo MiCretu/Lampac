@@ -2,11 +2,12 @@
 
 namespace Shared.Model.Online.Settings
 {
-    public class CollapsSettings : BaseSettings
+    public class CollapsSettings : BaseSettings, ICloneable
     {
-        public CollapsSettings(string host, bool enable = true, bool streamproxy = false, bool two = false)
+        public CollapsSettings(string plugin, string host, bool enable = true, bool streamproxy = false, bool two = false)
         {
             this.enable = enable;
+            this.plugin = plugin;
             this.streamproxy = streamproxy;
             this.two = two;
 
@@ -16,13 +17,18 @@ namespace Shared.Model.Online.Settings
 
 
         public bool two { get; set; }
-
+         
         public bool dash { get; set; }
 
 
         public CollapsSettings Clone()
         {
             return (CollapsSettings)MemberwiseClone();
+        }
+
+        object ICloneable.Clone()
+        {
+            return MemberwiseClone();
         }
     }
 }

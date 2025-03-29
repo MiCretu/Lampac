@@ -2,11 +2,12 @@
 
 namespace Lampac.Models.SISI
 {
-    public class SisiSettings : BaseSettings
+    public class SisiSettings : BaseSettings, ICloneable
     {
-        public SisiSettings(string host, bool enable = true, bool useproxy = false, bool streamproxy = false)
+        public SisiSettings(string plugin, string host, bool enable = true, bool useproxy = false, bool streamproxy = false)
         {
             this.enable = enable;
+            this.plugin = plugin;
             this.useproxy = useproxy;
             this.streamproxy = streamproxy;
 
@@ -14,11 +15,14 @@ namespace Lampac.Models.SISI
                 this.host = host.StartsWith("http") ? host : Decrypt(host);
         }
 
-        public string? cookie { get; set; }
-
         public SisiSettings Clone()
         {
             return (SisiSettings)MemberwiseClone();
+        }
+
+        object ICloneable.Clone()
+        {
+            return MemberwiseClone();
         }
     }
 }
